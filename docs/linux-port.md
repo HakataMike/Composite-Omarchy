@@ -32,6 +32,9 @@ Qt selects its platform from the desktop environment. If needed, force native Wa
 - Import images through a file dialog, startup arguments, or drag and drop. PNG and JPEG are the baseline; other formats depend on installed Qt image plugins.
 - The first image in a fresh startup document determines canvas dimensions. An explicitly created canvas retains its chosen dimensions.
 - Layers with visibility, inline rename, duplication, deletion, and raising/lowering.
+- Add transparent paint layers sized to the canvas. Brush (`B`) and eraser (`E`) paint on the selected visible raster layer, including transformed layers. Controls set color, diameter in document pixels, and opacity; the cursor outlines the brush footprint. These are round, hard brushes with antialiased edges.
+- Each stroke is one undo step. Stroke opacity is applied once across the entire stroke, including self-overlaps. Escape, focus loss, or changing tools cancels an unfinished stroke.
+- Rectangle selection (`M`) constrains painting and erasing in document coordinates. Drag to select, click to clear, or use Select → Deselect (`Ctrl+D`). Escape cancels a selection drag and restores the previous selection. Selections are session-only and clear when opening a different document or changing canvas size.
 - Drag a layer to move it. Shift constrains movement to one axis. Escape cancels the drag.
 - Numeric position, width, height, rotation, opacity, and horizontal/vertical flips. Transforming preserves source image pixels.
 - Normal, Multiply, Screen, Overlay, Darken, Lighten, Difference, Color Dodge, Color Burn, and Soft Light blending.
@@ -56,16 +59,17 @@ The loader validates IDs, transforms, sizes, filenames, asset containment, and c
 
 - `linux/src/document.*`: document/layer values, rendering, bounded image import, project persistence, and export.
 - `linux/src/canvas.*`: viewport, hit testing, temporary drag previews, zoom and pan.
+- `linux/src/painting.*`: brush/eraser rasterization with document-to-source mapping and selection clipping.
 - `linux/src/window.*`: editor controls, dialogs, and undo commands.
 - `linux/tests/`: Qt tests for rendering, transforms, persistence, rejection of unsupported/malformed data, save preservation, canvas gestures, and layer controls/history.
 
 Rendering currently uses QPainter on the CPU and caches a full-resolution composite for display. Layer changes and drag previews rebuild that composite synchronously. Large projects need a later tiled/dirty-region renderer and background processing. Qt's smooth image interpolation also does not yet reproduce the macOS high-quality downsampler exactly.
 
-The upstream C pixel routines remain available, but this first milestone does not yet wire them into painting or selection tools.
+The upstream C pixel routines remain available. The basic brush uses Qt rasterization; advanced selection and retouching tools have not yet been connected. Painting is clipped to the canvas and the layer's existing source image bounds. Use a canvas-sized paint layer to paint outside an imported image. Pressure, soft brushes, and selection editing beyond rectangle replacement are not implemented yet.
 
 ## Remaining port work
 
-1. Brushes, selections, masks, and grouping, with corresponding file-format support and regression tests.
+1. Soft brushes, additional selection tools, masks, and grouping, with corresponding file-format support and regression tests.
 2. Adjustments, filters, text, and shape tools.
 3. Retouching and a Linux replacement for Apple Vision background removal.
 4. Performance profiling, tiled rendering, and acceleration where measurements justify it.

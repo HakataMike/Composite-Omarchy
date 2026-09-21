@@ -2,7 +2,7 @@
 
 ## Compositor ARC — Linux / Omarchy port
 
-This fork includes an early **C++ / Qt 6** desktop editor alongside the original macOS app. It supports image import, flat raster layers, transforms, undo/redo, project saving, and PNG/JPEG export. Advanced macOS features are still being ported.
+This fork includes an early **C++ / Qt 6** desktop editor alongside the original macOS app. It supports image import, flat raster layers, transforms, brush/eraser painting, rectangular selections, undo/redo, project saving, and PNG/JPEG export. Advanced macOS features are still being ported.
 
 ```sh
 ./scripts/linux-build.sh

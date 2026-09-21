@@ -1,5 +1,9 @@
 #include "window.h"
 #include <QAction>
+#include <QActionGroup>
+#include <QColorDialog>
+#include <QColorSpace>
+#include <memory>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -55,11 +59,62 @@ Window::Window() {
     view->addAction("Zoom out", QKeySequence::ZoomOut, this, [this] { canvas->zoomBy(0.8); });
     auto *toolbar = addToolBar("Document"); toolbar->setMovable(false);
     toolbar->addAction(import); toolbar->addSeparator(); toolbar->addAction(undo); toolbar->addAction(redo); toolbar->addSeparator(); toolbar->addAction(fit);
+    auto *selectMenu = menuBar()->addMenu("&Select");
+    selectMenu->addAction("Deselect", QKeySequence("Ctrl+D"), canvas, &Canvas::clearSelection);
+    addToolBarBreak();
+    auto *tools = addToolBar("Painting"); tools->setMovable(false);
+    auto *toolGroup = new QActionGroup(this);
+    auto addTool = [&](QString label, QString shortcut, Canvas::Tool mode) {
+        auto *action = tools->addAction(label);
+        action->setCheckable(true); toolGroup->addAction(action);
+        action->setShortcut(QKeySequence(shortcut));
+        action->setShortcutContext(Qt::WidgetShortcut); canvas->addAction(action);
+        connect(action, &QAction::triggered, this, [this, mode] { canvas->setTool(mode); canvas->setFocus(); });
+        return action;
+    };
+    addTool("Move (V)", "V", Canvas::Tool::Move)->setChecked(true);
+    addTool("Brush (B)", "B", Canvas::Tool::Brush);
+    addTool("Eraser (E)", "E", Canvas::Tool::Eraser);
+    addTool("Select rectangle (M)", "M", Canvas::Tool::Rectangle);
+    tools->addSeparator();
+    auto *color = tools->addAction("Color…");
+    color->setObjectName("brushColor");
+    auto settings = std::make_shared<Arc::Brush>();
+    auto updateColorIcon = [color, settings] {
+        QPixmap swatch(20,20); swatch.fill(settings->color); color->setIcon(swatch);
+    };
+    updateColorIcon();
+    connect(color, &QAction::triggered, this, [this, settings, updateColorIcon] {
+        auto chosen = QColorDialog::getColor(settings->color, this, "Paint color");
+        if (chosen.isValid()) { settings->color = chosen; updateColorIcon(); canvas->setBrush(*settings); }
+    });
+    tools->addWidget(new QLabel(" Size "));
+    auto *size = new QSpinBox; size->setObjectName("brushSize"); size->setAccessibleName("Brush diameter");
+    size->setRange(1,2000); size->setValue(24); size->setSuffix(" px"); size->setKeyboardTracking(false); tools->addWidget(size);
+    connect(size, &QSpinBox::valueChanged, this, [this, settings](int value) { settings->diameter = value; canvas->setBrush(*settings); });
+    tools->addWidget(new QLabel(" Opacity "));
+    auto *strength = new QSpinBox; strength->setObjectName("brushOpacity"); strength->setAccessibleName("Brush opacity");
+    strength->setRange(1,100); strength->setValue(100); strength->setSuffix(" %"); strength->setKeyboardTracking(false); tools->addWidget(strength);
+    connect(strength, &QSpinBox::valueChanged, this, [this, settings](int value) { settings->opacity = value/100.0; canvas->setBrush(*settings); });
     auto *dock = new QDockWidget("Layers & transform", this);
     dock->setFeatures(QDockWidget::NoDockWidgetFeatures); dock->setMinimumWidth(265);
     auto *panel = new QWidget; auto *layout = new QVBoxLayout(panel);
     auto *hint = new QLabel("Top layer appears first.\nDouble-click a name to rename."); layout->addWidget(hint);
     layers = new QListWidget; layers->setObjectName("layers"); layers->setAccessibleName("Layers"); layout->addWidget(layers, 1);
+    auto *paintLayer = new QPushButton("Add paint layer"); paintLayer->setObjectName("addPaintLayer"); layout->addWidget(paintLayer);
+    connect(paintLayer, &QPushButton::clicked, this, [this] {
+        edit("Add paint layer", [](auto &d) {
+            qint64 pixels = qint64(d.size.width()) * d.size.height();
+            for (const auto &layer : d.layers) pixels += qint64(layer.image.width()) * layer.image.height();
+            if (pixels > Arc::MaxPixels) throw std::runtime_error("A new paint layer would exceed the 100-megapixel source limit.");
+            Arc::Layer layer; layer.name = "Paint layer"; layer.size = d.size;
+            layer.image = QImage(d.size, QImage::Format_ARGB32_Premultiplied);
+            if (layer.image.isNull()) throw std::runtime_error("Insufficient memory for paint layer.");
+            layer.image.fill(Qt::transparent); layer.image.setColorSpace(QColorSpace::SRgb);
+            int index = d.active < 0 ? int(d.layers.size()) : d.active+1;
+            d.layers.insert(index, layer); d.active = index;
+        });
+    });
     auto *buttons = new QHBoxLayout;
     auto button = [&](const QString &label, auto callback) {
         auto *b = new QPushButton(label); buttons->addWidget(b); connect(b, &QPushButton::clicked, this, callback);
@@ -103,6 +158,10 @@ Window::Window() {
     });
     connect(canvas, &Canvas::selected, this, [this](int index) { document.active = index; refresh(); });
     connect(canvas, &Canvas::moved, this, [this](int index, QPointF point) { edit("Move layer", [=](auto &d) { d.layers[index].origin = point; }); });
+    connect(canvas, &Canvas::painted, this, [this](int index, const QImage &image) {
+        edit("Paint stroke", [&](auto &d) { d.layers[index].image = image; });
+    });
+    connect(canvas, &Canvas::errorOccurred, this, [this](const QString &message) { QMessageBox::warning(this, "Painting", message); });
     connect(canvas, &Canvas::filesDropped, this, &Window::importImages);
     zoomLabel = new QLabel; statusBar()->addPermanentWidget(zoomLabel);
     connect(canvas, &Canvas::zoomChanged, this, [this](double value) { zoomLabel->setText(QString::number(value*100, 'f', 0) + "%"); });

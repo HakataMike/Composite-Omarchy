@@ -11,6 +11,7 @@
 #include <QAction>
 #include <QMessageBox>
 #include <QColorSpace>
+#include <QPushButton>
 
 class Tests : public QObject {
     Q_OBJECT
@@ -141,6 +142,96 @@ private slots:
         QTest::mouseMove(&c, start + QPoint(20,20)); QTest::mouseRelease(&c, Qt::LeftButton, Qt::NoModifier, start + QPoint(20,20)); QTest::keyRelease(&c, Qt::Key_Space);
         QCOMPARE(c.canvasToWidget({0,0}), before + QPointF(20,20));
         QCOMPARE(moves.size(), 1);
+    }
+    void brushOpacityAndErase() {
+        auto d = sample(); auto &layer = d.layers[0];
+        layer.image.fill(Qt::transparent); layer.origin = {}; layer.size = layer.image.size();
+        Arc::Brush brush; brush.color = Qt::red; brush.diameter = 4; brush.opacity = 0.5;
+        QPainterPath path; path.moveTo(3,6); path.lineTo(12,6); path.lineTo(3,6);
+        QRectF clip(0,0,16,12);
+        auto painted = Arc::paintStroke(layer, path, brush, clip);
+        QVERIFY(std::abs(painted.pixelColor(6,6).alpha()-128) <= 1);
+        QCOMPARE(painted.pixelColor(6,6).red(), 255);
+        QCOMPARE(painted.pixelColor(6,0).alpha(), 0);
+        QCOMPARE(layer.image.pixelColor(6,6).alpha(), 0); // Original history snapshot is untouched.
+        layer.image = painted; brush.eraser = true;
+        auto erased = Arc::paintStroke(layer, path, brush, clip);
+        QVERIFY(std::abs(erased.pixelColor(6,6).alpha()-64) <= 1);
+        brush.opacity = 1;
+        QCOMPARE(Arc::paintStroke(layer,path,brush,clip).pixelColor(6,6).alpha(), 0);
+        QPainterPath dot; dot.moveTo(6,6); brush.eraser = false;
+        QCOMPARE(Arc::paintStroke(layer,dot,brush,clip).pixelColor(6,6).alpha(), 255);
+    }
+    void transformedPaintingAndSelection() {
+        auto d = sample(); auto &layer = d.layers[0];
+        layer.image.fill(Qt::transparent); layer.origin = {20,20}; layer.size = {32,24};
+        layer.rotation = 90; layer.flipX = true;
+        QTransform toDocument = layer.transform(); toDocument.scale(2,2);
+        QPointF center = toDocument.map(QPointF(8.5,6.5));
+        QPainterPath dot; dot.moveTo(center);
+        Arc::Brush brush; brush.color = Qt::green; brush.diameter = 8;
+        auto result = Arc::paintStroke(layer,dot,brush,QRectF(0,0,100,100));
+        QCOMPARE(result.pixelColor(8,6), QColor(Qt::green));
+        QCOMPARE(result.pixelColor(0,0).alpha(), 0);
+        layer.origin = {}; layer.size = layer.image.size(); layer.rotation = 0; layer.flipX = false;
+        QPainterPath line; line.moveTo(0,6); line.lineTo(16,6); brush.diameter = 10;
+        auto selected = Arc::paintStroke(layer,line,brush,QRectF(5,4,4,4));
+        QCOMPARE(selected.pixelColor(6,5), QColor(Qt::green));
+        QCOMPARE(selected.pixelColor(4,5).alpha(), 0); QCOMPARE(selected.pixelColor(9,5).alpha(), 0);
+        QCOMPARE(selected.pixelColor(6,3).alpha(), 0); QCOMPARE(selected.pixelColor(6,8).alpha(), 0);
+        QCOMPARE(Arc::paintStroke(layer,line,brush,QRectF()), layer.image);
+    }
+    void paintGesturesAndSelectionCancel() {
+        Canvas canvas; canvas.resize(640,480); auto d = sample(); canvas.setDocument(d);
+        canvas.show(); canvas.fit(); QVERIFY(QTest::qWaitForWindowExposed(&canvas));
+        QSignalSpy painted(&canvas, &Canvas::painted);
+        auto point = [&](QPointF p) { return canvas.canvasToWidget(p).toPoint(); };
+        canvas.setTool(Canvas::Tool::Rectangle);
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,point({5,5}));
+        QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,point({10,10}));
+        QVERIFY(canvas.selectionBounds()); QCOMPARE(*canvas.selectionBounds(), QRectF(5,5,5,5));
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,point({1,1}));
+        QTest::mouseMove(&canvas,point({3,3})); QTest::keyClick(&canvas,Qt::Key_Escape);
+        QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,point({3,3}));
+        QCOMPARE(*canvas.selectionBounds(), QRectF(5,5,5,5));
+        canvas.setTool(Canvas::Tool::Brush);
+        Arc::Brush brush; brush.color = Qt::blue; brush.diameter = 20; canvas.setBrush(brush);
+        QTest::mouseClick(&canvas,Qt::LeftButton,Qt::NoModifier,point({7,7}));
+        QCOMPARE(painted.size(), 1);
+        auto image = painted[0][1].value<QImage>();
+        QCOMPARE(image.pixelColor(5,4), QColor(Qt::blue)); // Image origin is (2,3).
+        QCOMPARE(image.pixelColor(0,0), QColor(Qt::red));
+        canvas.setDocument(d);
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,point({7,7}));
+        QTest::mouseMove(&canvas,point({9,7})); QTest::keyClick(&canvas,Qt::Key_Escape);
+        QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,point({9,7}));
+        QCOMPARE(painted.size(), 1);
+        canvas.clearSelection(); QVERIFY(!canvas.selectionBounds());
+        QTest::mouseClick(&canvas,Qt::LeftButton,Qt::NoModifier,point({7,7}));
+        QCOMPARE(painted.size(), 2); // Cancellation leaves the next stroke usable.
+    }
+    void paintUndoAndProjectRoundTrip() {
+        QTemporaryDir temp;
+        Window window; window.show(); QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *add = window.findChild<QPushButton *>("addPaintLayer"); QVERIFY(add); QTest::mouseClick(add,Qt::LeftButton);
+        auto *canvas = window.findChild<Canvas *>(); canvas->fit(); canvas->setTool(Canvas::Tool::Brush);
+        auto *list = window.findChild<QListWidget *>("layers"); QCOMPARE(list->count(), 1);
+        QSignalSpy painted(canvas, &Canvas::painted);
+        QPoint start = canvas->canvasToWidget({100,100}).toPoint();
+        QTest::mousePress(canvas,Qt::LeftButton,Qt::NoModifier,start);
+        QTest::mouseMove(canvas,start+QPoint(40,0));
+        QTest::mouseRelease(canvas,Qt::LeftButton,Qt::NoModifier,start+QPoint(40,0));
+        QCOMPARE(painted.size(), 1);
+        auto image = painted[0][1].value<QImage>(); QVERIFY(image.pixelColor(100,100).alpha() > 0);
+        Arc::Document d; Arc::Layer layer; layer.image = image; layer.size = image.size(); layer.name = "Paint";
+        d.layers.append(layer); d.active = 0;
+        auto path = temp.filePath("paint.comp"); Arc::saveProject(d,path);
+        QCOMPARE(Arc::loadProject(path).layers[0].image, image);
+        QAction *undo = nullptr;
+        for (auto *action : window.findChildren<QAction *>()) if (action->shortcut() == QKeySequence::Undo) undo = action;
+        QVERIFY(undo); undo->trigger(); QCOMPARE(list->count(), 1);
+        QVERIFY(window.isWindowModified()); // The new layer remains; one stroke was one edit.
+        undo->trigger(); QCOMPARE(list->count(), 0); QVERIFY(!window.isWindowModified());
     }
     void windowUndoAndLayerControls() {
         QTemporaryDir temp; auto image = sample().layers[0].image; QVERIFY(image.save(temp.filePath("red.png")));
