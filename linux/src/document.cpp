@@ -6,6 +6,7 @@
 #include "masks.h"
 #include "adjustments.h"
 #include "effects.h"
+#include "heif_import.h"
 #include <algorithm>
 #include <QColorSpace>
 #include <QDir>
@@ -147,8 +148,13 @@ QImage readImage(const QString &path) {
     require(QFileInfo(path).size() <= 512LL * 1024 * 1024, "Image exceeds 512 MiB.");
     QImageReader reader(path);
     reader.setAutoTransform(true);
-    require(validSize(reader.size()), "Unsupported image or dimensions (maximum 100 megapixels).");
-    QImage image = reader.read();
+    QImage image;
+    const auto suffix=QFileInfo(path).suffix().toLower();
+    if(suffix=="heic" || suffix=="heif" || suffix=="avif") image=readHeif(path);
+    else {
+        require(validSize(reader.size()), "Unsupported image or dimensions (maximum 100 megapixels).");
+        image=reader.read();
+    }
     require(!image.isNull(), "Cannot read image: " + reader.errorString());
     if (image.colorSpace().isValid()) image.convertToColorSpace(QColorSpace::SRgb);
     image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);

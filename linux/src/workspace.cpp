@@ -7,9 +7,13 @@
 #include <QTabWidget>
 #include <QToolButton>
 #include <QTimer>
+#include <QTabBar>
+#include <QDragEnterEvent>
+#include "layer_tree.h"
 
 Workspace::Workspace(QWidget *parent) : QMainWindow(parent),tabs(new QTabWidget) {
     resize(1320,900); tabs->setObjectName("documentTabs"); tabs->setTabsClosable(true); tabs->setMovable(true); setCentralWidget(tabs);
+    tabs->tabBar()->setAcceptDrops(true); tabs->tabBar()->installEventFilter(this);
     connect(tabs,&QTabWidget::tabCloseRequested,this,&Workspace::closeTab);
     connect(tabs,&QTabWidget::currentChanged,this,[this] { updateTitles(); if(auto *editor=activeEditor()) editor->findChild<Canvas *>()->setFocus(); });
     auto *add=new QToolButton; add->setText("+"); add->setToolTip("New document"); tabs->setCornerWidget(add);
@@ -74,4 +78,21 @@ void Workspace::copyLayersTo(int targetIndex) {
     if(!source || !target || source==target) return;
     try { target->receiveLayers(source->selectedLayersForTransfer()); }
     catch(const std::exception &e) { QMessageBox::warning(this,"Copy layers",QString::fromUtf8(e.what())); }
+}
+
+bool Workspace::eventFilter(QObject *object,QEvent *event) {
+    if(object!=tabs->tabBar()) return QMainWindow::eventFilter(object,event);
+    if(event->type()!=QEvent::DragEnter && event->type()!=QEvent::DragMove && event->type()!=QEvent::Drop)
+        return QMainWindow::eventFilter(object,event);
+    auto *drop=static_cast<QDropEvent *>(event);
+    const auto *data=dynamic_cast<const LayerMimeData *>(drop->mimeData());
+    if(!data || data->layers.isEmpty()) return QMainWindow::eventFilter(object,event);
+    int index=tabs->tabBar()->tabAt(drop->position().toPoint());
+    auto *target=index<0 ? nullptr : qobject_cast<Window *>(tabs->widget(index));
+    if(!target || target->findChild<LayerTree *>()==data->origin) { drop->ignore(); return true; }
+    drop->setDropAction(Qt::CopyAction); drop->accept();
+    if(event->type()==QEvent::Drop) {
+        target->receiveLayers(data->layers); tabs->setCurrentIndex(index);
+    }
+    return true;
 }

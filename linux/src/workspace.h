@@ -13,6 +13,7 @@ public:
     void copyLayersTo(int targetIndex);
 protected:
     void closeEvent(QCloseEvent *event) override;
+    bool eventFilter(QObject *object,QEvent *event) override;
 private:
     QTabWidget *tabs;
     Window *attach(Window *editor);

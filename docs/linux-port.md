@@ -6,7 +6,7 @@ This is an early working editor, not feature parity with the macOS application.
 
 ## Build, run, and test
 
-Required tools: a C++17 compiler, GNU Make, Qt 6 Core/Gui/Widgets, qmake6, and Qt Test for the tests. On Arch/Omarchy these are supplied by `gcc`, `make`, and `qt6-base`; native Wayland support also needs `qt6-wayland`. No new packages were needed on the development machine.
+Required tools: a C++17 compiler, GNU Make, Qt 6 Core/Gui/Widgets, qmake6, libheif (tested with 1.23.4), and Qt Test for the tests. On Arch/Omarchy these are supplied by `gcc`, `make`, `pkgconf`, `libheif`, and `qt6-base`; native Wayland support also needs `qt6-wayland`. TIFF and WebP support require `qt6-imageformats`. No new packages were needed on the development machine.
 
 From the repository root:
 
@@ -33,7 +33,7 @@ The Linux port deliberately omits automatic AI background removal and has no Pyt
 
 ## Available now
 
-- Import images through a file dialog, startup arguments, or drag and drop. PNG and JPEG are the baseline; other formats depend on installed Qt image plugins.
+- Import images through a file dialog, startup arguments, or drag and drop. PNG/JPEG use Qt; HEIC/HEIF/AVIF use the shared [libheif library](https://github.com/strukturag/libheif); TIFF/WebP use `qt6-imageformats`. HEIF imports the primary image, applies its orientation, and converts supported SDR color profiles to sRGB. Unsupported HDR transfer functions report an error asking for SDR conversion. Editing remains 8-bit SDR; depth maps, image sequences, and camera metadata are not retained.
 - The first image in a fresh startup document determines canvas dimensions. An explicitly created canvas retains its chosen dimensions.
 - Layers with visibility, inline rename, duplication, deletion, and raising/lowering.
 - Add transparent paint layers sized to the canvas. Brush (`B`) and eraser (`E`) paint on the selected visible raster layer, including transformed layers. Controls set color, diameter in document pixels, and opacity; the cursor outlines the brush footprint. Hardness controls the edge: 100% gives a hard round brush, lower values give a soft falloff. Soft coverage uses 24 nested strokes as an approximation of a linear radial falloff.
@@ -115,7 +115,7 @@ Adjustment layers: Layer → New adjustment layer offers Hue/Saturation, Levels,
 
 Layer effects: Layer → Layer effects offers editable Stroke (inside/outside), Drop Shadow, Color Overlay, and Inner Shadow. Each effect can be included, hidden, recolored, or removed independently. Effects follow the layer’s visible masked shape, expand beyond its source bounds, and participate in transformations, clipping, merge operations, undo, exports, and project persistence. Live preview can be disabled on large layers. Shadows use the existing three-box Gaussian approximation; wide strokes use linear-time square morphology, matching the native stroke shape.
 
-Document tabs: New canvas and Open project create separate tabs; reopening the same project focuses its existing tab. Each editor retains its selection, view, tools, and undo history. Close document (Ctrl+W), the tab close button, and Quit check unsaved changes. Layer → Copy selected layers to document copies the selection and folder descendants into another tab as one undo step, remaps IDs, and bakes external clipping dependencies. Geometry is retained in document coordinates. Tabs may be reordered; direct layer dragging between tabs is not yet implemented.
+Document tabs: New canvas and Open project create separate tabs; reopening the same project focuses its existing tab. Each editor retains its selection, view, tools, and undo history. Close document (Ctrl+W), the tab close button, and Quit check unsaved changes. Layer → Copy selected layers to document copies the selection and folder descendants into another tab as one undo step, remaps IDs, and bakes external clipping dependencies. Geometry is retained in document coordinates. Tabs may be reordered. Drag selected layer rows onto another document’s tab to copy them there; the source stays intact, and undo in the destination removes the copy.
 
 Selection editing: Select → Feather selection, Invert selection, Select layer pixels, and Select layer mask retain grayscale coverage. Painting, retouching, filter previews, adjustment creation, and clipboard extraction respect soft coverage. Drag inside a selection with a marquee/lasso tool to move its outline. Drag inside it with Move to lift and move the selected pixels onto a new layer; Alt-drag duplicates them and Shift constrains the axis. Escape restores the gesture. Copy (Ctrl+C), Cut (Ctrl+X), Copy Merged, Paste, and Duplicate selected pixels (Ctrl+J) are available in Edit. Pixel edits have undo history; selection outlines remain session state.
 

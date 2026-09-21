@@ -41,3 +41,7 @@ HEADERS += ../src/spatial_filters.h
 SOURCES += ../src/geometry.cpp
 HEADERS += ../src/geometry.h
 SOURCES += ../src/export_dialog.cpp
+CONFIG += link_pkgconfig
+PKGCONFIG += libheif
+SOURCES += ../src/heif_import.cpp
+HEADERS += ../src/heif_import.h

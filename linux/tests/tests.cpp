@@ -18,6 +18,9 @@
 #include "../src/window.h"
 #include "../src/workspace.h"
 #include <QTabWidget>
+#include <QTabBar>
+#include <QDragEnterEvent>
+#include "../src/layer_tree.h"
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QJsonDocument>
@@ -54,6 +57,35 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void layerDropBetweenTabs() {
+        Workspace workspace; workspace.show(); auto *source=workspace.activeEditor(); source->initializeDocument(sample());
+        auto *target=workspace.addDocument(); auto *tabs=workspace.findChild<QTabWidget *>("documentTabs");
+        tabs->setCurrentWidget(source); QApplication::processEvents();
+        LayerMimeData data; data.origin=source->findChild<LayerTree *>(); data.layers=source->selectedLayersForTransfer();
+        data.setData("application/x-compositor-layers","1"); QVERIFY(!data.layers.isEmpty());
+        auto *bar=tabs->tabBar(); auto point=bar->tabRect(tabs->indexOf(target)).center();
+        QDragEnterEvent enter(point,Qt::CopyAction|Qt::MoveAction,&data,Qt::LeftButton,Qt::NoModifier); QApplication::sendEvent(bar,&enter); QVERIFY(enter.isAccepted());
+        QDropEvent drop(point,Qt::CopyAction|Qt::MoveAction,&data,Qt::LeftButton,Qt::NoModifier); QApplication::sendEvent(bar,&drop);
+        QVERIFY(drop.isAccepted()); QCOMPARE(drop.dropAction(),Qt::CopyAction); QCOMPARE(workspace.activeEditor(),target);
+        QCOMPARE(target->selectedLayersForTransfer().size(),1); QCOMPARE(source->selectedLayersForTransfer().size(),1);
+        QCOMPARE(target->selectedLayersForTransfer()[0].image,sample().layers[0].image);
+        QAction *undo=nullptr; for(auto *action:target->findChildren<QAction *>()) if(action->shortcut()==QKeySequence::Undo) undo=action;
+        QVERIFY(undo); undo->trigger(); QVERIFY(target->selectedLayersForTransfer().isEmpty());
+    }
+    void heicAndTiffImport() {
+        auto heic=QFINDTESTDATA("fixtures/colors.heic"),tiff=QFINDTESTDATA("fixtures/colors.tiff");
+        QVERIFY(!heic.isEmpty() && !tiff.isEmpty());
+        for(auto path:{heic,tiff}) {
+            auto image=Arc::readImage(path); QCOMPARE(image.size(),QSize(32,24));
+            QCOMPARE(image.format(),QImage::Format_ARGB32_Premultiplied); QCOMPARE(image.colorSpace(),QColorSpace(QColorSpace::SRgb));
+            auto red=image.pixelColor(4,4),blue=image.pixelColor(24,4);
+            QVERIFY(red.red()>245 && red.blue()<10); QVERIFY(blue.blue()>245 && blue.red()<10);
+            auto d=sample(); d.layers[0].image=image; d.layers[0].size=image.size();
+            QTemporaryDir temp; auto project=temp.filePath("import.comp"); Arc::saveProject(d,project); QCOMPARE(Arc::loadProject(project).layers[0].image,image);
+        }
+        QTemporaryDir temp; auto broken=temp.filePath("broken.heic"); QFile file(broken); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("invalid"); file.close();
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error,Arc::readImage(broken));
+    }
     void exportPreviewSaveAndCancel() {
         auto d=sample(); QTemporaryDir temp; auto project=temp.filePath("export.comp"); Arc::saveProject(d,project);
         Window window; window.show(); window.openProject(project); QAction *exportAction=nullptr;

@@ -19,7 +19,7 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 - [x] Adjustment layers: Hue/Saturation, Levels, Curves, Exposure, Gradient Map, Grain
 - [x] All 14 blend modes (reference-color and transparency tests; macOS cross-render fixtures remain)
 - [x] Layer stroke, drop shadow, color overlay, and inner shadow effects
-- [x] Multiple documents/tabs and inter-document layer copying (menu workflow; direct drag between tabs remains a UI refinement)
+- [x] Multiple documents/tabs and inter-document layer copying through the menu or direct drops on destination tabs
 
 ## Selection and geometry
 - [x] Rectangle selection constraining painting
@@ -45,7 +45,7 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 ## Final acceptance
 - [ ] Actual Wayland mouse/keyboard sessions for every tool and dialog dismissal
 - [ ] Representative multilayer image editing, saving/reopening, and export comparisons
-- [ ] HEIC/TIFF plugin availability and format behavior
+- [x] HEIC/TIFF import with checked-in color fixtures, size limits, and project round trips (8-bit SDR; unsupported HEIF HDR reports an error)
 - [x] High-quality downsampling, pixel grid, export preview
 - [ ] No silent loss of unsupported document data
 - [ ] Review all remaining deviations before calling this a full port

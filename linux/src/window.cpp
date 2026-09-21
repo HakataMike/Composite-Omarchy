@@ -62,7 +62,7 @@ Window::Window() {
     file->addAction("&New canvas…", QKeySequence::New, this, &Window::newProject);
     file->addAction("&Open project…", QKeySequence::Open, this, &Window::chooseProject);
     auto *import = file->addAction("&Import images…", QKeySequence("Ctrl+I"), this, [this] {
-        importImages(QFileDialog::getOpenFileNames(this, "Import images", {}, "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp);;All files (*)"));
+        importImages(QFileDialog::getOpenFileNames(this, "Import images", {}, "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp *.heic *.heif *.avif);;All files (*)"));
     });
     file->addSeparator();
     file->addAction("&Save project", QKeySequence::Save, this, [this] { save(); });
@@ -322,7 +322,8 @@ Window::Window() {
     dock->setFeatures(QDockWidget::NoDockWidgetFeatures); dock->setMinimumWidth(265);
     auto *panel = new QWidget; auto *layout = new QVBoxLayout(panel);
     auto *hint = new QLabel("Top layer appears first.\nDouble-click a name to rename."); layout->addWidget(hint);
-    layers = new LayerTree; layers->setObjectName("layers"); layers->setAccessibleName("Layers"); layout->addWidget(layers, 1);
+    layers = new LayerTree;
+    layers->transferLayers=[this] { return selectedLayersForTransfer(); }; layers->setObjectName("layers"); layers->setAccessibleName("Layers"); layout->addWidget(layers, 1);
     auto *paintLayer = new QPushButton("Add paint layer"); paintLayer->setObjectName("addPaintLayer"); layout->addWidget(paintLayer);
     connect(paintLayer, &QPushButton::clicked, this, [this] {
         edit("Add paint layer", [](auto &d) {
