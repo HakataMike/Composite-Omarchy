@@ -13,6 +13,7 @@ struct FilterSettings {
     int channel=0;
     quint32 seed=1;
 };
+double evaluateCurve(const QVector<QPointF> &points, double x);
 QStringList filterNames();
 QVector<FilterParameter> filterParameters(const QString &kind);
 FilterSettings defaultFilter(const QString &kind);

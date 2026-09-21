@@ -27,3 +27,6 @@ SOURCES += ../src/clipping.cpp
 HEADERS += ../src/clipping.h
 SOURCES += ../src/masks.cpp
 HEADERS += ../src/masks.h
+SOURCES += ../src/adjustments.cpp
+HEADERS += ../src/adjustments.h
+SOURCES += ../src/adjustment_dialog.cpp

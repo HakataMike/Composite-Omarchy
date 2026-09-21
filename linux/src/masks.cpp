@@ -35,7 +35,7 @@ Layer maskTargetLayer(const Layer &l) {
         target.origin=p.origin; target.size=p.size; target.rotation=p.rotation;
         target.flipX=p.flipX; target.flipY=p.flipY; target.sampling=p.sampling;
     }
-    target.image=l.mask; target.shape={}; target.text={}; target.isGroup=false;
+    target.adjustment={}; target.image=l.mask; target.shape={}; target.text={}; target.isGroup=false;
     return target;
 }
 void validateMaskPlacement(const Layer &l) { if(!l.maskPlacement.isEmpty()) placement(l.maskPlacement); }

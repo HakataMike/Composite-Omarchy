@@ -3,6 +3,7 @@
 #include "blending.h"
 #include "styles.h"
 #include "masks.h"
+#include "adjustments.h"
 #include <QHash>
 #include <QSet>
 #include <functional>
@@ -23,7 +24,7 @@ void validateClipping(const Document &d) {
             if(!layers.contains(id) || seen.contains(id) || seen.size()>=256)
                 throw std::runtime_error("Missing or cyclic clipping source (maximum chain length 256).");
             seen.insert(id); const auto &current=*layers[id];
-            if(!current.maskSourceID.isNull() && (current.isGroup || !layers.contains(current.maskSourceID) || layers[current.maskSourceID]->isGroup))
+            if(!current.maskSourceID.isNull() && (current.isGroup || !layers.contains(current.maskSourceID) || (layers[current.maskSourceID]->isGroup || !layers[current.maskSourceID]->adjustment.isEmpty())))
                 throw std::runtime_error("Clipping masks require raster source and target layers.");
             id=current.maskSourceID;
         }
@@ -32,10 +33,10 @@ void validateClipping(const Document &d) {
 namespace {
 class ClippingRenderer {
 public:
-    Document flat, sources;
+    Document original, flat, sources;
     QHash<QUuid,int> byId;
     QHash<QUuid,QUuid> parents;
-    explicit ClippingRenderer(const Document &d) : flat(flattenGroups(d)) {
+    explicit ClippingRenderer(const Document &d) : original(d), flat(flattenGroups(d)) {
         auto unmasked=d;
         for(auto &l:unmasked.layers) if(l.isGroup) l.maskEnabled=false;
         sources=flattenGroups(unmasked);
@@ -46,6 +47,22 @@ public:
         Document single=folderMasks ? flat : sources; auto layer=single.layers[index];
         layer.visible=true; layer.blend="Normal"; layer.maskSourceID={};
         single.layers={layer}; single.active=0; return render(single);
+    }
+    QImage adjustmentCoverage(int index, bool folderMasks=true) const {
+        Document probe=original; probe.layers.clear(); probe.active=-1;
+        for(auto layer:original.layers) {
+            if(layer.isGroup) { if(!folderMasks) layer.maskEnabled=false; probe.layers.append(layer); }
+            else if(layer.id==flat.layers[index].id) {
+                if(!layer.mask.isNull()) layer.maskPlacement=placementOf(maskTargetLayer(layer));
+                layer.adjustment={}; layer.maskSourceID={}; layer.blend="Normal";
+                layer.origin={}; layer.size=original.size; layer.rotation=0; layer.flipX=layer.flipY=false;
+                layer.image=QImage(original.size,QImage::Format_ARGB32_Premultiplied);
+                if(layer.image.isNull()) throw std::runtime_error("Insufficient memory for adjustment mask.");
+                layer.image.fill(Qt::white);
+                probe.layers.append(layer);
+            }
+        }
+        return render(probe);
     }
     QImage alpha(QUuid id) const {
         const auto &layer=flat.layers[byId.value(id)];
@@ -84,6 +101,11 @@ QImage renderClipping(const Document &d) {
     for(int i=0;i<renderer.flat.layers.size();++i) if(renderer.flat.layers[i].visible) visible.append(i);
     for(int row=0;row<visible.size();++row) {
         int index=visible[row]; const auto &base=renderer.flat.layers[index];
+        if(!base.adjustment.isEmpty()) {
+            auto coverage=renderer.adjustmentCoverage(index);
+            if(!base.maskSourceID.isNull()) applyAlpha(coverage,renderer.alpha(base.maskSourceID),false);
+            compositeAdjustment(result,base,coverage); continue;
+        }
         auto pixels=renderer.own(index);
         int end=row+1;
         if(base.maskSourceID.isNull()) while(end<visible.size()) {
@@ -104,7 +126,8 @@ QImage renderClipping(const Document &d) {
             }
             for(int child=row+1;child<end;++child) {
                 const auto &layer=renderer.flat.layers[visible[child]];
-                compositeImages(pixels,renderer.own(visible[child],false),layer.blend);
+                if(!layer.adjustment.isEmpty()) compositeAdjustment(pixels,layer,renderer.adjustmentCoverage(visible[child],false));
+                else compositeImages(pixels,renderer.own(visible[child],false),layer.blend);
             }
             applyAlpha(pixels,coverage,true); row=end-1;
         } else if(!base.maskSourceID.isNull()) applyAlpha(pixels,renderer.alpha(base.maskSourceID),false);
@@ -116,7 +139,7 @@ void createClippingMask(Document &d) {
     if(d.active<0 || d.layers[d.active].isGroup) throw std::runtime_error("Select a raster layer to clip.");
     auto &layer=d.layers[d.active];
     for(int i=d.active-1;i>=0;--i) if(d.layers[i].parentID==layer.parentID) {
-        if(d.layers[i].isGroup) break;
+        if(d.layers[i].isGroup || (!d.layers[i].adjustment.isEmpty() && d.layers[i].maskSourceID.isNull())) break;
         layer.maskSourceID=d.layers[i].maskSourceID.isNull() ? d.layers[i].id : d.layers[i].maskSourceID;
         validate(d); return;
     }
@@ -139,6 +162,21 @@ void bakeClippingDependents(Document &d, const QSet<QUuid> &removed) {
 }
 void bakeClippingMask(Document &d, int index) {
     auto &layer=d.layers[index]; if(layer.maskSourceID.isNull()) return;
+    if(!layer.adjustment.isEmpty()) {
+        ClippingRenderer renderer(d); QImage coverage;
+        QImage baked(d.size,QImage::Format_Grayscale8);
+        if(baked.isNull()) throw std::runtime_error("Insufficient memory to bake adjustment clipping.");
+        // The rendered coverage includes opacity and ancestor masks; bake only the
+        // clipping dependency into the layer's own full-canvas mask instead.
+        Document own=d; for(auto &l:own.layers) if(l.isGroup) { l.maskEnabled=false; l.opacity=1; }
+        own.layers[index].opacity=1; ClippingRenderer ownRenderer(own);
+        coverage=ownRenderer.adjustmentCoverage(index,false);
+        applyAlpha(coverage,renderer.alpha(layer.maskSourceID),false);
+        for(int y=0;y<coverage.height();++y) for(int x=0;x<coverage.width();++x) baked.scanLine(y)[x]=qAlpha(coverage.pixel(x,y));
+        layer.mask=baked;
+        Layer placement; placement.size=d.size; layer.maskPlacement=placementOf(placement);
+        layer.maskEnabled=true; layer.maskSourceID={}; return;
+    }
     auto extent=layer.transform().mapRect(QRectF(QPointF(),layer.size));
     if(extent.width()>30000 || extent.height()>30000)
         throw std::runtime_error("Clipping bake exceeds supported dimensions.");

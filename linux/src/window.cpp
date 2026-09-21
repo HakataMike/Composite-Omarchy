@@ -1,4 +1,5 @@
 #include "window.h"
+#include "adjustments.h"
 #include "operations.h"
 #include "selection.h"
 #include "filters.h"
@@ -117,6 +118,9 @@ Window::Window() {
             for(const auto &layer:d.layers) if(layer.id==parent) { d.layers[d.active].parentID=layer.parentID; break; }
         });
     });
+    auto *adjustments=layerMenu->addMenu("New adjustment layer");
+    for(const auto &kind:Arc::adjustmentKinds()) adjustments->addAction(kind+"…",this,[this,kind] { adjustmentDialog(kind); });
+    layerMenu->addAction("Edit adjustment…",this,[this] { adjustmentDialog(); });
     layerMenu->addAction("Edit shape…",this,&Window::shapeDialog);
     layerMenu->addAction("Edit text…",this,[this] { textDialog({},Qt::black,true); });
     layerMenu->addAction("Create clipping mask",QKeySequence("Ctrl+Alt+G"),this,[this] { edit("Create clipping mask",Arc::createClippingMask); });
@@ -437,7 +441,8 @@ void Window::refresh() {
         if(!l.isGroup) flags &= ~Qt::ItemIsDropEnabled;
         item->setFlags(flags); item->setCheckState(0,l.visible ? Qt::Checked : Qt::Unchecked);
         item->setIcon(0,l.isGroup ? style()->standardIcon(QStyle::SP_DirIcon)
-            : QIcon(QPixmap::fromImage(l.image.scaled(48,48,Qt::KeepAspectRatio,Qt::SmoothTransformation))));
+            : !l.adjustment.isEmpty() ? style()->standardIcon(QStyle::SP_FileDialogDetailedView)
+            : l.image.isNull() ? QIcon() : QIcon(QPixmap::fromImage(l.image.scaled(48,48,Qt::KeepAspectRatio,Qt::SmoothTransformation))));
         item->setExpanded(!collapsed.contains(l.id)); item->setSelected(selected.contains(l.id) || i==document.active); items[l.id]=item;
         if(i==document.active) layers->setCurrentItem(item,0,QItemSelectionModel::NoUpdate);
     }
@@ -450,7 +455,7 @@ void Window::refresh() {
     }
     const bool hasLayer = document.active >= 0;
     const bool hasMask = hasLayer && !document.layers[document.active].mask.isNull();
-    addMask->setEnabled(hasLayer && !hasMask && (document.layers[document.active].isGroup || !document.layers[document.active].image.isNull()));
+    addMask->setEnabled(hasLayer && !hasMask && (document.layers[document.active].isGroup || !document.layers[document.active].adjustment.isEmpty() || !document.layers[document.active].image.isNull()));
     removeMask->setEnabled(hasMask); maskEnabled->setEnabled(hasMask);
     maskEnabled->setChecked(hasMask && document.layers[document.active].maskEnabled);
     maskLinked->setEnabled(hasMask); maskLinked->setChecked(hasMask && document.layers[document.active].maskLinked);

@@ -43,7 +43,7 @@ void multiplyMask(Layer &child, const Layer &group) {
 void validateHierarchy(const Document &d) {
     auto byId=indices(d);
     for(const auto &l:d.layers) {
-        if(l.isGroup && (!l.image.isNull() || !l.shape.isEmpty() || !l.text.isEmpty() || l.blend!="Normal"))
+        if(l.isGroup && (!l.image.isNull() || !l.adjustment.isEmpty() || !l.shape.isEmpty() || !l.text.isEmpty() || l.blend!="Normal"))
             throw std::runtime_error("Folders cannot contain source pixels or a layer blend mode.");
         QSet<QUuid> seen{l.id};
         auto parent=l.parentID;

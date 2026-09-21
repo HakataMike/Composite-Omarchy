@@ -29,8 +29,7 @@ FilterSettings defaultFilter(const QString &kind) {
     for(const auto &p:filterParameters(kind)) settings.values[p.key]=p.initial;
     return settings;
 }
-namespace {
-double curveValue(const QVector<QPointF> &points,double x) {
+double evaluateCurve(const QVector<QPointF> &points,double x) {
     int i=0; while(i+2<points.size() && points[i+1].x()<=x) ++i;
     auto slopeBetween=[&](int j) { return (points[j+1].y()-points[j].y())/(points[j+1].x()-points[j].x()); };
     auto slope=[&](int j) {
@@ -43,6 +42,7 @@ double curveValue(const QVector<QPointF> &points,double x) {
     return std::clamp((2*t*t*t-3*t*t+1)*points[i].y()+(t*t*t-2*t*t+t)*h*slope(i)
         +(-2*t*t*t+3*t*t)*points[i+1].y()+(t*t*t-t*t)*h*slope(i+1),0.0,255.0);
 }
+namespace {
 QTransform documentToPixels(const Layer &layer,QSize pixels) {
     auto t=layer.transform(); t.scale(layer.size.width()/pixels.width(),layer.size.height()/pixels.height());
     return t.inverted();
@@ -81,7 +81,7 @@ QImage applyFilter(const QImage &image,const FilterSettings &f) {
             } else if(f.channel==0 || f.channel==c+1) {
                 if(f.kind=="Levels") y=(value("outputBlack")+(value("outputWhite")-value("outputBlack"))
                     *std::pow(std::clamp((i-value("black"))/(value("white")-value("black")),0.0,1.0),1/value("gamma")))/255;
-                else y=curveValue(f.curve,i)/255;
+                else y=evaluateCurve(f.curve,i)/255;
             }
             tables[c*256+i]=std::clamp(y,0.0,1.0);
         }

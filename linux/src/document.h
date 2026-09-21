@@ -13,6 +13,7 @@ struct Layer {
     QUuid parentID, maskSourceID;
     bool isGroup = false;
     QImage image;
+    QJsonObject adjustment;
     QJsonObject shape, text; // Editable source; image remains the portable raster fallback.
     QImage mask; // Grayscale8 coverage; optional placement gives independent document coordinates.
     bool maskEnabled = true, maskLinked = true;

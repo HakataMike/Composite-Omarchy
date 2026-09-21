@@ -4,6 +4,7 @@
 #include "hierarchy.h"
 #include "clipping.h"
 #include "masks.h"
+#include "adjustments.h"
 #include <algorithm>
 #include <QColorSpace>
 #include <QDir>
@@ -85,7 +86,7 @@ QStringList blendModes() {
 bool Layer::operator==(const Layer &o) const {
     return id == o.id && parentID == o.parentID && maskSourceID == o.maskSourceID && isGroup == o.isGroup && name == o.name && image == o.image && origin == o.origin && size == o.size
         && rotation == o.rotation && flipX == o.flipX && flipY == o.flipY && visible == o.visible
-        && shape == o.shape && text == o.text && mask == o.mask && maskEnabled == o.maskEnabled && maskLinked == o.maskLinked && maskPlacement == o.maskPlacement
+        && adjustment == o.adjustment && shape == o.shape && text == o.text && mask == o.mask && maskEnabled == o.maskEnabled && maskLinked == o.maskLinked && maskPlacement == o.maskPlacement
         && opacity == o.opacity && blend == o.blend && sampling == o.sampling;
 }
 bool Document::operator==(const Document &o) const {
@@ -116,6 +117,10 @@ void validate(const Document &d) {
     qint64 pixels = 0, maskPixels = 0;
     for (const auto &l : d.layers) {
         validateStyles(l); validateMaskPlacement(l);
+        if(!l.adjustment.isEmpty()) {
+            validateAdjustment(l.adjustment);
+            require(!l.isGroup && l.image.isNull() && l.shape.isEmpty() && l.text.isEmpty(), "Adjustment layers cannot contain source pixels or styles.");
+        }
         require(!l.id.isNull() && !ids.contains(l.id), "Duplicate or invalid layer ID."); ids.insert(l.id);
         require(std::isfinite(l.origin.x()) && std::isfinite(l.origin.y()) && std::abs(l.origin.x()) <= 1000000
             && std::abs(l.origin.y()) <= 1000000 && std::isfinite(l.rotation)
@@ -153,7 +158,7 @@ void paint(QPainter &p, const Document &d, QRect region) {
     if (region.isNull()) region = QRect(QPoint(), d.size);
     p.save();
     p.setClipRect(region.intersected(QRect(QPoint(), d.size)), Qt::IntersectClip);
-    if(hasClipping(d)) { p.drawImage(QPoint(),render(d)); p.restore(); return; }
+    if((hasClipping(d) || hasAdjustments(d))) { p.drawImage(QPoint(),render(d)); p.restore(); return; }
     if(std::any_of(d.layers.begin(),d.layers.end(),[](const auto &l) { return l.isGroup; })) { paint(p,flattenGroups(d),region); p.restore(); return; }
     if(hasNonseparableBlend(d)) {
         p.drawImage(QPoint(),render(d)); p.restore(); return;
@@ -219,7 +224,7 @@ void repaintRegion(QImage &image, const Document &d, QRect region) {
             "Invalid canvas preview cache.");
     region = region.intersected(QRect(QPoint(),d.size));
     if (region.isEmpty()) return;
-    if(hasClipping(d) || hasNonseparableBlend(d) || std::any_of(d.layers.begin(),d.layers.end(),[](const auto &l) { return l.isGroup; })) { image=render(d); return; }
+    if((hasClipping(d) || hasAdjustments(d)) || hasNonseparableBlend(d) || std::any_of(d.layers.begin(),d.layers.end(),[](const auto &l) { return l.isGroup; })) { image=render(d); return; }
     for (const auto &layer : d.layers) {
         if (!layer.visible || layer.image.isNull()) continue;
         if (!layer.maskPlacement.isEmpty() || layer.rotation != 0 || layer.flipX || layer.flipY || layer.size != QSizeF(layer.image.size())
@@ -240,7 +245,7 @@ void repaintRegion(QImage &image, const Document &d, QRect region) {
 }
 QImage render(const Document &d, bool whiteBackground) {
     validate(d);
-    const bool clipping=hasClipping(d);
+    const bool clipping=(hasClipping(d) || hasAdjustments(d));
     if(!clipping && std::any_of(d.layers.begin(),d.layers.end(),[](const auto &l) { return l.isGroup; })) return render(flattenGroups(d),whiteBackground);
     QImage result=clipping ? renderClipping(d) : QImage(d.size,QImage::Format_ARGB32_Premultiplied);
     require(!result.isNull(), "Insufficient memory to render canvas.");
@@ -305,7 +310,7 @@ Document loadProject(const QString &path) {
     for (const auto value : m["layers"].toArray()) {
         require(value.isObject(), "Invalid layer record.");
         const auto r = value.toObject();
-        keys(r, {"id", "name", "isVisible", "transform", "imageFile", "opacity", "blendMode", "parentID", "isGroup", "maskFile", "maskEnabled", "shape", "text", "maskSourceID", "maskPlacement", "maskLinked"});
+        keys(r, {"id", "name", "isVisible", "transform", "imageFile", "opacity", "blendMode", "parentID", "isGroup", "maskFile", "maskEnabled", "shape", "text", "maskSourceID", "maskPlacement", "maskLinked", "adjustment"});
         Layer l;
         if(r.contains("parentID") && !r["parentID"].isNull()) l.parentID=uuid(r["parentID"]);
         if(r.contains("maskSourceID") && !r["maskSourceID"].isNull()) { require(version>=5,"Clipping masks require version 5."); l.maskSourceID=uuid(r["maskSourceID"]); }
@@ -334,6 +339,10 @@ Document loadProject(const QString &path) {
                 require(r[field].isObject() && !r[field].toObject().isEmpty() && !asset.isEmpty(), "Invalid editable layer metadata.");
                 if(field=="shape") l.shape=r[field].toObject(); else l.text=r[field].toObject();
             }
+        }
+        if(r.contains("adjustment") && !r["adjustment"].isNull()) {
+            require(version>=7 && r["adjustment"].isObject() && !r["adjustment"].toObject().isEmpty() && asset.isEmpty(), "Invalid adjustment layer metadata.");
+            l.adjustment=r["adjustment"].toObject();
         }
         QString maskFile;
         if (r.contains("maskFile")) {
@@ -434,6 +443,7 @@ void saveProject(const Document &d, const QString &path) {
             version = std::max(version,l.isGroup ? 6 : 4);
         }
         if(!l.maskSourceID.isNull()) { r["maskSourceID"]=idString(l.maskSourceID); version=std::max(version,5); }
+        if(!l.adjustment.isEmpty()) { r["adjustment"]=l.adjustment; version=std::max(version,7); }
         if(l.isGroup) r["isGroup"]=true;
         if(!l.parentID.isNull()) r["parentID"]=idString(l.parentID);
         if(!l.shape.isEmpty()) { r["shape"]=l.shape; version=8; }

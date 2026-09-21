@@ -16,7 +16,7 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 - [ ] Shear-producing group and linked-mask transforms
 - [x] Mask fill/invert/blur/feather (Gaussian approximation documented)
 - [ ] Merge Down / Merge Layers / Merge Group
-- [ ] Adjustment layers: Hue/Saturation, Levels, Curves, Exposure, Gradient Map, Grain
+- [x] Adjustment layers: Hue/Saturation, Levels, Curves, Exposure, Gradient Map, Grain
 - [x] All 14 blend modes (reference-color and transparency tests; macOS cross-render fixtures remain)
 - [ ] Layer stroke/shadow effects
 - [ ] Multiple documents/tabs and inter-document layer transfer

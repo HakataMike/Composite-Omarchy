@@ -1,4 +1,6 @@
 #include "../src/document.h"
+#include "../src/adjustments.h"
+#include <QDialogButtonBox>
 #include "../src/operations.h"
 #include "../src/selection.h"
 #include "../src/filters.h"
@@ -43,6 +45,72 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void adjustmentRenderingAndPersistence() {
+        auto d=sample(); auto source=d.layers[0].image;
+        Arc::Layer adjustment; adjustment.name="Hue"; adjustment.size=d.size;
+        auto settings=Arc::defaultFilter("Hue/Saturation"); settings.values["hue"]=120;
+        adjustment.adjustment=Arc::adjustmentFromFilter(settings,{}); d.layers.append(adjustment); d.active=1;
+        QCOMPARE(Arc::render(d).pixelColor(5,5),QColor(Qt::green));
+        QCOMPARE(d.layers[0].image,source); QCOMPARE(Arc::render(d).pixelColor(0,0).alpha(),0);
+        d.layers[1].opacity=0.5; auto c=Arc::render(d).pixelColor(5,5);
+        QVERIFY(std::abs(c.red()-128)<=1 && std::abs(c.green()-127)<=1);
+        d.layers[1].opacity=1; d.layers[1].mask=QImage(d.size,QImage::Format_Grayscale8); d.layers[1].mask.fill(Qt::white);
+        d.layers[1].mask.setPixelColor(5,5,Qt::black); QCOMPARE(Arc::render(d).pixelColor(5,5),QColor(Qt::red));
+        QCOMPARE(Arc::render(d).pixelColor(6,5),QColor(Qt::green));
+        QTemporaryDir temp; auto file=temp.filePath("adjustment.comp"); Arc::saveProject(d,file);
+        auto loaded=Arc::loadProject(file); QCOMPARE(loaded.layers,d.layers); QCOMPARE(Arc::render(loaded),Arc::render(d));
+        QCOMPARE(metadata(file)["version"].toInt(),7);
+        auto invalid=d; invalid.layers[1].image=source; QVERIFY_THROWS_EXCEPTION(std::runtime_error,Arc::validate(invalid));
+        invalid=d; invalid.layers[0].maskSourceID=d.layers[1].id; QVERIFY_THROWS_EXCEPTION(std::runtime_error,Arc::validate(invalid));
+        for(auto kind:Arc::adjustmentKinds()) {
+            auto a=Arc::defaultAdjustment(kind); Arc::validateAdjustment(a);
+            auto result=Arc::adjustedImage(source,a); QCOMPARE(result.size(),source.size()); QCOMPARE(result.pixelColor(0,0).alpha(),255);
+        }
+    }
+    void adjustmentChannelsFoldersAndClipping() {
+        auto d=sample(); Arc::Layer a; a.size=d.size; auto f=Arc::defaultFilter("Hue/Saturation"); f.values["hue"]=120;
+        a.adjustment=Arc::adjustmentFromFilter(f,{}); d.layers.append(a); d.active=1;
+        Arc::createClippingMask(d); d.layers[0].opacity=0.5;
+        QCOMPARE(Arc::render(d).pixelColor(5,5),QColor(0,255,0,127));
+        Arc::bakeClippingMask(d,1); QVERIFY(d.layers[1].maskSourceID.isNull());
+        // Baking a clipping dependency produces an independent masked adjustment.
+        QVERIFY(!d.layers[1].mask.isNull()); QVERIFY(Arc::render(d).pixelColor(5,5).green()>100);
+        d.layers[0].opacity=1; d.layers[1].mask={}; d.layers[1].maskPlacement={};
+        Arc::Layer group; group.isGroup=true; group.size=d.size; group.mask=QImage(d.size,QImage::Format_Grayscale8); group.mask.fill(Qt::white);
+        group.mask.setPixelColor(5,5,Qt::black); d.layers[1].parentID=group.id; d.layers.append(group);
+        QCOMPARE(Arc::render(d).pixelColor(5,5),QColor(Qt::red)); QCOMPARE(Arc::render(d).pixelColor(6,5),QColor(Qt::green));
+        auto levels=Arc::defaultAdjustment("Levels"); auto red=Arc::filterFromAdjustment(levels,1); red.values["outputWhite"]=0;
+        levels=Arc::adjustmentFromFilter(red,levels); auto blue=Arc::filterFromAdjustment(levels,3); blue.values["outputBlack"]=255;
+        levels=Arc::adjustmentFromFilter(blue,levels); QCOMPARE(Arc::adjustedImage(d.layers[0].image,levels).pixelColor(0,0),QColor(Qt::blue));
+        auto translucent=d.layers[0].image; translucent.fill(QColor(255,0,0,128));
+        QCOMPARE(Arc::adjustedImage(translucent,levels).pixelColor(0,0),QColor(0,0,255,128));
+        auto curves=Arc::defaultAdjustment("Curves"); auto curve=Arc::filterFromAdjustment(curves,1); curve.curve={{0,0},{255,0}};
+        curves=Arc::adjustmentFromFilter(curve,curves); QCOMPARE(Arc::adjustedImage(d.layers[0].image,curves).pixelColor(0,0),QColor(Qt::black));
+    }
+    void adjustmentDialogUndoAndCancel() {
+        auto d=sample(); QTemporaryDir temp; auto file=temp.filePath("adjustment-ui.comp"); Arc::saveProject(d,file);
+        Window window; window.show(); window.openProject(file);
+        QAction *create=nullptr,*modify=nullptr,*save=nullptr,*undo=nullptr;
+        for(auto *action:window.findChildren<QAction *>()) {
+            if(action->text()=="Hue/Saturation…") create=action;
+            if(action->text()=="Edit adjustment…") modify=action;
+            if(action->text()=="&Save project") save=action;
+            if(action->shortcut()==QKeySequence::Undo) undo=action;
+        }
+        QVERIFY(create && modify && save && undo);
+        QTimer::singleShot(50,[&] {
+            auto *dialog=qobject_cast<QDialog *>(QApplication::activeModalWidget()); QVERIFY(dialog);
+            auto *hue=dialog->findChild<QDoubleSpinBox *>("hue"); QVERIFY(hue); hue->setValue(120); dialog->accept();
+        });
+        create->trigger(); save->trigger(); auto changed=Arc::loadProject(file); QCOMPARE(changed.layers.size(),2);
+        QCOMPARE(Arc::render(changed).pixelColor(5,5),QColor(Qt::green));
+        QTimer::singleShot(50,[&] {
+            auto *dialog=qobject_cast<QDialog *>(QApplication::activeModalWidget()); QVERIFY(dialog);
+            dialog->findChild<QDoubleSpinBox *>("hue")->setValue(240); dialog->reject();
+        });
+        modify->trigger(); save->trigger(); QCOMPARE(Arc::loadProject(file).layers,changed.layers);
+        undo->trigger(); save->trigger(); QCOMPARE(Arc::loadProject(file).layers,d.layers);
+    }
     void independentMaskGeometryAndPainting() {
         auto d=sample(); auto &l=d.layers[0];
         l.mask=QImage(l.image.size(),QImage::Format_Grayscale8); l.mask.fill(Qt::white);

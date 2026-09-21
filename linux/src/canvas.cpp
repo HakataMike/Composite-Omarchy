@@ -217,7 +217,7 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
     }
     if (tool == Tool::Brush || tool == Tool::Eraser || tool==Tool::Gradient || tool==Tool::Clone || tool==Tool::Heal || tool==Tool::Blur) {
         int index = document.active;
-        if (index < 0 || (document.layers[index].image.isNull() && !(document.layers[index].isGroup && maskTarget)) || !Arc::effectiveVisible(document,index)) {
+        if (index < 0 || (document.layers[index].image.isNull() && !((document.layers[index].isGroup || !document.layers[index].adjustment.isEmpty()) && maskTarget)) || !Arc::effectiveVisible(document,index)) {
             emit errorOccurred("Select a visible image layer, or add a paint layer, before painting.");
             return;
         }
