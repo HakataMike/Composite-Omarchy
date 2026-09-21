@@ -245,6 +245,8 @@ Window::Window() {
     addTool("Clone stamp (S)", "S", Canvas::Tool::Clone);
     addTool("Healing (J)", "J", Canvas::Tool::Heal);
     addTool("Blur brush", "", Canvas::Tool::Blur);
+    addTool("Smudge", "", Canvas::Tool::Smudge);
+    addTool("Liquify", "", Canvas::Tool::Liquify);
     addTool("Rectangle shape (U)", "U", Canvas::Tool::ShapeRectangle);
     addTool("Ellipse shape", "", Canvas::Tool::ShapeEllipse);
     addTool("Line shape", "", Canvas::Tool::ShapeLine);
@@ -408,13 +410,21 @@ Window::Window() {
     connect(layers, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *item) {
         if(refreshing) return;
         document.active=item ? item->data(0,Qt::UserRole).toInt() : -1;
-        refresh();
+        refresh(false);
     });
     connect(layers, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem *item, int column) {
         if(refreshing || column!=0) return;
         int index=item->data(0,Qt::UserRole).toInt();
         QString name=item->text(0); bool visible=item->checkState(0)==Qt::Checked;
         edit("Layer properties",[=](auto &d) { d.layers[index].name=name; d.layers[index].visible=visible; });
+    });
+    connect(layers,&LayerTree::copiesDropped,this,[this](QVector<Arc::Layer> copies,QUuid parent,QUuid anchor,bool above) {
+        edit("Duplicate layers",[&](auto &d) {
+            int insertion=d.layers.size();
+            for(int i=0;i<d.layers.size();++i) if(d.layers[i].id==anchor) { insertion=i+(above ? 1 : 0); break; }
+            for(auto copy:copies) { if(copy.parentID.isNull()) copy.parentID=parent; d.layers.insert(insertion++,copy); }
+            if(!copies.isEmpty()) d.active=insertion-1;
+        });
     });
     connect(layers,&LayerTree::orderChanged,this,[this] {
         QVector<Arc::Layer> ordered;
@@ -495,8 +505,9 @@ Window::Window() {
     statusBar()->showMessage("Drag to move • Wheel to zoom • Space-drag to pan • Ctrl+I to import");
     refresh();
 }
-void Window::refresh() {
+void Window::refresh(bool rebuildLayers) {
     refreshing = true;
+    if(rebuildLayers) {
     QSet<QUuid> collapsed, selected;
     for(QTreeWidgetItemIterator it(layers); *it; ++it) {
         auto id=(*it)->data(0,Qt::UserRole+1).toUuid();
@@ -520,6 +531,7 @@ void Window::refresh() {
             : l.image.isNull() ? QIcon() : QIcon(QPixmap::fromImage(l.image.scaled(48,48,Qt::KeepAspectRatio,Qt::SmoothTransformation))));
         item->setExpanded(!collapsed.contains(l.id)); item->setSelected(selected.contains(l.id) || i==document.active); items[l.id]=item;
         if(i==document.active) layers->setCurrentItem(item,0,QItemSelectionModel::NoUpdate);
+    }
     }
     inspector->setEnabled(document.active >= 0);
     if (document.active >= 0) {

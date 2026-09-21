@@ -46,7 +46,7 @@ private:
     QLabel *zoomLabel;
     bool refreshing = false, tabbed = false;
     bool sizeFirstImport = true;
-    void refresh();
+    void refresh(bool rebuildLayers = true);
     void edit(const QString &name, const std::function<void(Arc::Document &)> &operation);
     void editGeometry(const QString &name, const std::function<void(Arc::Layer &)> &operation);
     void editLayer(const QString &name, const std::function<void(Arc::Layer &)> &operation);

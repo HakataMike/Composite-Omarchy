@@ -1,16 +1,16 @@
 # Linux port parity checklist
 
-Scope: the macOS app in this checkout, including behavior described in README.md and its Swift implementations. A feature is complete only when usable from the Qt UI, preserved where applicable by project save/load, and covered by relevant verification. Similar-looking output alone does not establish parity.
+Scope: the macOS app in this checkout, including behavior described in README.md and its Swift implementations. A feature is complete only when usable from the Qt UI, preserved where applicable by project save/load, and covered by relevant verification. Similar-looking output alone does not establish parity. The non-AI Linux implementation is complete; the external acceptance items below remain explicitly unverified.
 
 ## Foundation
 - [x] Native Qt/Wayland editor, import, raster layers, basic transforms, history, PNG/JPEG export
 - [x] Brush/eraser, hardness, opacity, linked raster masks
 - [x] Regional painting redraw on pixel-aligned large documents (transformed layers retain exact full redraw)
-- [ ] Full v1–8 project format with fixture verification
+- [x] Version 1–8 schema loading, hand-authored legacy fixtures, supported feature records, and save/reopen regression checks; actual Mac-generated comparisons remain below
 - [x] Linux packaging, launcher, stripped release archive, and installation instructions (system Qt/libheif dependencies)
 
 ## Layer workflow
-- [ ] Folders, nesting/reordering, group transforms and masks (implemented; broader physical drag/drop acceptance remains)
+- [x] Folders, nesting/reordering, Alt-drag duplication, group transforms and masks; stable selection indexes during dragging
 - [x] Clipping stacks and dependency masks, bake/release, source deletion preservation
 - [x] Independent mask transforms, link/unlink, painting in mask coordinates, persistence
 - [x] Shear-producing group and linked-mask transforms (native rotated-rectangle projection)
@@ -36,16 +36,18 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 - [x] Eyedropper
 - [x] Linear/radial, opaque/transparent/reversed gradients and editable shapes
 - [x] Editable paragraph text with inline editing and font controls
-- [x] Clone stamp with source marker, three healing modes, content-aware fill, blur tool
+- [x] Clone stamp with source marker, three healing modes, extending content-aware fill, blur, smudge, and liquify
 - [x] Levels/Auto, graphical Curves, selective Hue/Saturation, Exposure, Gradient Map, Grain/Noise, Invert
 - [x] Gaussian/motion blur with expanded bounds, lens correction (CPU approximations documented)
-- Automatic AI background removal is intentionally excluded from the Linux port to keep installation small. Use selection tools and layer masks for manual background removal.
+- Automatic AI background removal and AI object selection are intentionally excluded from the Linux port to keep installation small. Use selection tools and layer masks for manual background removal.
 - [x] Live selection-limited previews
 
 ## Final acceptance
-- [ ] Actual Wayland mouse/keyboard sessions for every tool and dialog dismissal
-- [ ] Representative multilayer image editing, saving/reopening, and export comparisons
+- [x] Complete QtTest suite on Wayland and offscreen (68 cases); real keyboard smoke test for shortcuts, export dismissal, and quit
+- [ ] Exhaustive physical mouse/tablet acceptance for every tool and drag/drop gesture (QtTest input is widget-injected)
+- [ ] Actual macOS-generated project and cross-render comparisons (requires macOS)
+- [x] Representative multilayer project with editable text/shapes, folder, effect, and adjustment: save/reopen, PNG pixel equality, JPEG dimensions, and editor screenshot
 - [x] HEIC/TIFF import with checked-in color fixtures, size limits, and project round trips (8-bit SDR; unsupported HEIF HDR reports an error)
 - [x] High-quality downsampling, pixel grid, export preview
-- [ ] No silent loss of unsupported document data
-- [ ] Review all remaining deviations before calling this a full port
+- [x] Unknown project data rejected; unsupported source data and format differences documented
+- [x] Remaining deviations reviewed and documented in linux-port.md: Qt rendering/font differences, CPU performance, 8-bit SDR, Linux folder opacity extension, and excluded AI features

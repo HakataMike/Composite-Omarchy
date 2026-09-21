@@ -122,6 +122,7 @@ void Canvas::updateStroke(QPointF point) {
             if(maskTarget) document.layers[dragLayer].mask=result; else document.layers[dragLayer].image=result;
         } else if(tool==Tool::Clone) document.layers[dragLayer].image=Arc::cloneStroke(strokeOriginal,cloneSample,*cloneOffset,strokePath,settings,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()));
         else if(tool==Tool::Heal) document.layers[dragLayer].image=Arc::healStroke(strokeOriginal,strokePath,settings,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()),healingMode);
+        else if(tool==Tool::Smudge || tool==Tool::Liquify) document.layers[dragLayer].image=Arc::warpStroke(strokeOriginal,strokePath,settings,document.size,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()),tool==Tool::Smudge);
         else if(tool==Tool::Blur) {
             auto result=Arc::blurStroke(strokeOriginal,strokePath,settings,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()),maskTarget);
             if(maskTarget) document.layers[dragLayer].mask=result; else document.layers[dragLayer].image=result;
@@ -242,7 +243,7 @@ void Canvas::paintEvent(QPaintEvent *) {
         }
         p.restore();
     }
-    if (underMouse() && !panning && (tool == Tool::Brush || tool == Tool::Eraser || tool == Tool::Clone || tool == Tool::Heal || tool == Tool::Blur)) {
+    if (underMouse() && !panning && (tool == Tool::Brush || tool == Tool::Eraser || tool == Tool::Clone || tool == Tool::Heal || tool == Tool::Blur || tool==Tool::Smudge || tool==Tool::Liquify)) {
         QPointF center = documentPoint(pointerPosition);
         QPen white(Qt::white, 2); white.setCosmetic(true);
         p.setBrush(Qt::NoBrush); p.setPen(white); p.drawEllipse(center, brush.diameter/2, brush.diameter/2);
@@ -336,7 +337,7 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
         updateSelection(point);
         return;
     }
-    if (tool == Tool::Brush || tool == Tool::Eraser || tool==Tool::Gradient || tool==Tool::Clone || tool==Tool::Heal || tool==Tool::Blur) {
+    if (tool == Tool::Brush || tool == Tool::Eraser || tool==Tool::Gradient || tool==Tool::Clone || tool==Tool::Heal || tool==Tool::Blur || tool==Tool::Smudge || tool==Tool::Liquify) {
         int index = document.active;
         if (index < 0 || (document.layers[index].image.isNull() && !((document.layers[index].isGroup || !document.layers[index].adjustment.isEmpty()) && maskTarget)) || !Arc::effectiveVisible(document,index)) {
             emit errorOccurred("Select a visible image layer, or add a paint layer, before painting.");
@@ -346,7 +347,7 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
             emit errorOccurred("Add and enable the layer mask before painting it.");
             return;
         }
-        if(maskTarget && (tool==Tool::Clone || tool==Tool::Heal)) { emit errorOccurred("Clone and healing tools edit image pixels. Choose Paint image first."); return; }
+        if(maskTarget && (tool==Tool::Clone || tool==Tool::Heal || tool==Tool::Smudge || tool==Tool::Liquify)) { emit errorOccurred("Clone, healing, smudge, and liquify tools edit image pixels. Choose Paint image first."); return; }
         if(tool==Tool::Clone) {
             if(!cloneAnchor) { emit errorOccurred("Alt-click to choose the clone source first."); return; }
             if(!cloneAligned || !cloneOffset) { auto offset=*cloneAnchor-documentPoint(event->position()); cloneOffset=QPointF(std::round(offset.x()),std::round(offset.y())); }

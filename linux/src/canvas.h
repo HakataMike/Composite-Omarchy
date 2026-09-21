@@ -9,7 +9,7 @@ class QPlainTextEdit;
 class Canvas : public QWidget {
     Q_OBJECT
 public:
-    enum class Tool { Move, Brush, Eraser, Rectangle, Ellipse, Lasso, Polygon, Wand, Eyedropper, Gradient, Clone, Heal, Blur, ShapeRectangle, ShapeEllipse, ShapeLine, Text, Crop };
+    enum class Tool { Move, Brush, Eraser, Rectangle, Ellipse, Lasso, Polygon, Wand, Eyedropper, Gradient, Clone, Heal, Blur, Smudge, Liquify, ShapeRectangle, ShapeEllipse, ShapeLine, Text, Crop };
     explicit Canvas(QWidget *parent = nullptr);
     void setTool(Tool tool);
     void beginTextEditing(int index);

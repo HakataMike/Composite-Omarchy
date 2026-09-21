@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <cstring>
 #include <algorithm>
+#include <cmath>
 extern "C" {
 #include "../../Compositor/Rendering/HealPixels.h"
 }
@@ -71,6 +72,69 @@ QImage blurStroke(const Layer &layer,const QPainterPath &path,const Brush &brush
     if(source.isNull()) throw std::runtime_error("Select an image or mask to blur.");
     auto coverageImage=coverage(mask ? maskTargetLayer(layer) : layer,path,brush,clip,selection,source.size());
     return mix(source,blurImage(source,std::clamp(int(brush.diameter/10),1,50)),coverageImage);
+}
+QImage warpStroke(const Layer &layer,const QPainterPath &path,const Brush &brush,QSize canvas,const QPainterPath &selection,bool smudge) {
+    if(layer.image.isNull()) throw std::runtime_error("Select an image to smudge or liquify.");
+    if(path.elementCount()<2 || brush.opacity==0) return layer.image;
+    if(canvas.width()<1 || canvas.height()<1 || qint64(canvas.width())*canvas.height()>MaxPixels
+        || !std::isfinite(brush.diameter) || brush.diameter<1 || brush.diameter>2000
+        || !std::isfinite(brush.hardness) || brush.hardness<0 || brush.hardness>1
+        || !std::isfinite(brush.opacity) || brush.opacity<0 || brush.opacity>1)
+        throw std::runtime_error("Invalid warp stroke dimensions.");
+    // Work in document pixels so a round brush remains round on scaled/rotated
+    // layers, then replace only the stroke footprint in the original source.
+    QImage working(canvas,QImage::Format_RGBA8888_Premultiplied);
+    if(working.isNull()) throw std::runtime_error("Insufficient memory for warp stroke.");
+    working.fill(Qt::transparent);
+    { QPainter p(&working); p.setTransform(layer.transform()); p.setRenderHint(QPainter::SmoothPixmapTransform); p.drawImage(QRectF(QPointF(),layer.size),layer.image); }
+    double diameter=std::max(2.0,brush.diameter),hardness=std::clamp(brush.hardness,0.0,0.98),strength=std::clamp(brush.opacity,0.01,1.0);
+    int radius=int(std::ceil(diameter/2)),side=2*radius+1;
+    auto weight=[&](int x,int y) { double u=std::hypot(x,y)/(diameter/2); if(u>=1) return 0.0; if(u<=hardness) return 1.0; double t=(1-u)/(1-hardness); return t*t*(3-2*t); };
+    QPointF last(path.elementAt(0).x,path.elementAt(0).y); QVector<float> carried;
+    if(smudge) {
+        carried.fill(0,side*side*4); int cx=qRound(last.x()),cy=qRound(last.y());
+        for(int y=-radius;y<=radius;++y) for(int x=-radius;x<=radius;++x) if(working.rect().contains(cx+x,cy+y))
+            for(int c=0;c<4;++c) carried[((y+radius)*side+x+radius)*4+c]=working.constScanLine(cy+y)[(cx+x)*4+c];
+    }
+    for(int i=1;i<path.elementCount();++i) {
+        QPointF end(path.elementAt(i).x,path.elementAt(i).y); double distance=QLineF(last,end).length();
+        double spacing=std::max(1.0,diameter*(smudge ? 0.08 : 0.025)); if(distance<spacing) continue;
+        if(!std::isfinite(distance) || distance/spacing>100000) throw std::runtime_error("Warp stroke is too long.");
+        int steps=int(std::ceil(distance/spacing)); QPointF previous=last;
+        for(int step=1;step<=steps;++step) {
+            auto next=last+(end-last)*(double(step)/steps),move=(next-previous)*strength;
+            int cx=qRound(next.x()),cy=qRound(next.y());
+            int margin=int(std::ceil(std::max(std::abs(move.x()),std::abs(move.y()))))+2;
+            QRect patch=QRect(cx-radius-margin,cy-radius-margin,2*(radius+margin)+1,2*(radius+margin)+1).intersected(working.rect());
+            QImage scratch; if(!smudge && !patch.isEmpty()) scratch=working.copy(patch);
+            if(!smudge && !patch.isEmpty() && scratch.isNull()) throw std::runtime_error("Insufficient memory for liquify dab.");
+            for(int y=-radius;y<=radius;++y) for(int x=-radius;x<=radius;++x) {
+                if(!working.rect().contains(cx+x,cy+y)) continue;
+                double w=weight(x,y); if(w==0) continue; auto *pixel=working.scanLine(cy+y)+(cx+x)*4;
+                if(smudge) {
+                    int index=((y+radius)*side+x+radius)*4;
+                    for(int c=0;c<4;++c) { double value=pixel[c]+(carried[index+c]-pixel[c])*w; pixel[c]=qRound(value); carried[index+c]=value+(carried[index+c]-value)*strength; }
+                } else {
+                    double sx=std::clamp(cx+x-patch.x()-move.x()*w,0.0,double(patch.width()-1));
+                    double sy=std::clamp(cy+y-patch.y()-move.y()*w,0.0,double(patch.height()-1));
+                    int ix=int(sx),iy=int(sy),jx=std::min(ix+1,patch.width()-1),jy=std::min(iy+1,patch.height()-1);
+                    for(int c=0;c<4;++c) {
+                        double top=scratch.constScanLine(iy)[ix*4+c]*(1-(sx-ix))+scratch.constScanLine(iy)[jx*4+c]*(sx-ix);
+                        double bottom=scratch.constScanLine(jy)[ix*4+c]*(1-(sx-ix))+scratch.constScanLine(jy)[jx*4+c]*(sx-ix);
+                        pixel[c]=qRound(top*(1-(sy-iy))+bottom*(sy-iy));
+                    }
+                }
+            }
+            previous=next;
+        }
+        last=end;
+    }
+    QImage changed(layer.image.size(),QImage::Format_ARGB32_Premultiplied);
+    if(changed.isNull()) throw std::runtime_error("Insufficient memory for warp result.");
+    changed.fill(Qt::transparent);
+    { QPainter p(&changed); p.setTransform(mapping(layer,changed.size())); p.setRenderHint(QPainter::SmoothPixmapTransform); p.drawImage(QPoint(),working); }
+    Brush footprint=brush; footprint.diameter=std::min(2000.0,diameter+4); footprint.hardness=1; footprint.opacity=1;
+    return mix(layer.image,changed,coverage(layer,path,footprint,QRectF(QPointF(),canvas),selection,layer.image.size()));
 }
 QImage cloneStroke(const Layer &layer,const QImage &sample,QPointF offset,const QPainterPath &path,const Brush &brush,QRectF clip,const QPainterPath &selection) {
     if(layer.image.isNull() || sample.isNull()) throw std::runtime_error("Choose a clone source with Alt-click first.");

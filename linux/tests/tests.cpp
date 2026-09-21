@@ -57,6 +57,70 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void representativeProjectAndExports() {
+        Arc::Document d; d.size={640,420};
+        Arc::Layer background; background.name="Background"; background.size=d.size; background.image=QImage(d.size,QImage::Format_ARGB32_Premultiplied);
+        { QPainter p(&background.image); QLinearGradient g(0,0,640,420); g.setColorAt(0,QColor("#172038")); g.setColorAt(1,QColor("#344f62")); p.fillRect(background.image.rect(),g); }
+        background.image.setColorSpace(QColorSpace::SRgb); d.layers={background};
+        Arc::Layer folder; folder.name="Artwork"; folder.isGroup=true; folder.size=d.size; d.layers.append(folder);
+        Arc::Layer shape; shape.name="Accent"; shape.parentID=folder.id; shape.origin={390,85}; shape.size={170,170}; shape.rotation=18;
+        shape.shape=Arc::shapeStyle("Rectangle",QColor("#56cbbf")); shape.image=Arc::shapeImage(shape.shape,shape.size);
+        auto shadow=Arc::defaultEffect("shadow"); shadow["distance"]=12; shadow["blur"]=12; shape.effects={{"shadow",shadow}}; d.layers.append(shape);
+        Arc::Layer text; text.name="Title"; text.parentID=folder.id; text.origin={45,65}; text.text=Arc::textStyle(Qt::white);
+        text.text["content"]="Compositor"; text.text["fontSize"]=42; text.text["boxSize"]=QJsonArray{390,100}; text.image=Arc::textImage(text.text); text.size=text.image.size(); d.layers.append(text);
+        text.id=QUuid::createUuid(); text.name="Subtitle"; text.origin={48,155}; text.text["fontSize"]=18; text.text["content"]="Native Linux / Qt 6\nLayers, masks, and editable text";
+        text.image=Arc::textImage(text.text); text.size=text.image.size(); d.layers.append(text);
+        Arc::Layer adjustment; adjustment.name="Exposure"; adjustment.size=d.size; adjustment.adjustment=Arc::adjustmentFromFilter(Arc::defaultFilter("Exposure"),{}); d.layers.append(adjustment); d.active=3;
+        QTemporaryDir temp; auto destination=qEnvironmentVariable("COMPOSITOR_ACCEPTANCE_OUTPUT"); if(destination.isEmpty()) destination=temp.path();
+        QVERIFY(QDir().mkpath(destination)); auto project=destination+"/linux-acceptance.comp";
+        auto expected=Arc::render(d); Arc::saveProject(d,project); auto loaded=Arc::loadProject(project); QCOMPARE(loaded.layers,d.layers); QCOMPARE(Arc::render(loaded),expected);
+        Arc::exportImage(loaded,destination+"/linux-acceptance.png"); QCOMPARE(Arc::readImage(destination+"/linux-acceptance.png"),expected);
+        Arc::exportImage(loaded,destination+"/linux-acceptance.jpg",95); QCOMPARE(Arc::readImage(destination+"/linux-acceptance.jpg").size(),d.size);
+        Window window; window.show(); QVERIFY(window.openProject(project)); window.findChild<Canvas *>()->fit(); QApplication::processEvents();
+        QVERIFY(window.grab().save(destination+"/linux-editor.png"));
+    }
+    void layerSelectionKeepsDragIndexesAndDuplicateUndo() {
+        class DropHarness : public LayerTree { public: void drop(QDropEvent *event) { dropEvent(event); } };
+        DropHarness dropTree; dropTree.resize(200,120); dropTree.show();
+        LayerMimeData data; data.origin=&dropTree; data.layers=sample().layers;
+        QSignalSpy copied(&dropTree,&LayerTree::copiesDropped);
+        QDropEvent event(QPointF(50,60),Qt::CopyAction|Qt::MoveAction,&data,Qt::LeftButton,Qt::AltModifier);
+        dropTree.drop(&event); QVERIFY(event.isAccepted()); QCOMPARE(event.dropAction(),Qt::CopyAction); QCOMPARE(copied.count(),1);
+        auto d=sample(); auto second=d.layers[0]; second.id=QUuid::createUuid(); second.name="Second"; d.layers.append(second);
+        Window window; window.initializeDocument(d); window.show(); QApplication::processEvents();
+        auto *tree=window.findChild<LayerTree *>(); auto *item=tree->topLevelItem(0);
+        QPersistentModelIndex index=tree->indexFromItem(item);
+        QTest::mouseClick(tree->viewport(),Qt::LeftButton,Qt::NoModifier,tree->visualItemRect(item).center());
+        QVERIFY(index.isValid()); QCOMPARE(tree->currentItem(),item);
+        auto copies=window.selectedLayersForTransfer(); QVERIFY(!copies.isEmpty());
+        tree->copiesDropped(copies,{},d.layers[0].id,true);
+        QCOMPARE(tree->topLevelItemCount(),3);
+        QAction *undo=nullptr; for(auto *a:window.findChildren<QAction *>()) if(a->shortcut()==QKeySequence::Undo) undo=a;
+        QVERIFY(undo); undo->trigger(); QCOMPARE(tree->topLevelItemCount(),2);
+    }
+    void smudgeLiquifyAndCancellation() {
+        Arc::Document d; d.size={32,24}; Arc::Layer layer; layer.size=d.size;
+        layer.image=QImage(d.size,QImage::Format_ARGB32_Premultiplied); layer.image.fill(Qt::blue);
+        { QPainter p(&layer.image); p.fillRect(0,0,16,24,Qt::red); } d.layers={layer}; d.active=0;
+        Arc::Brush brush; brush.diameter=8; brush.hardness=0.8; brush.opacity=1;
+        QPainterPath path; path.moveTo(12,12); path.lineTo(22,12);
+        for(bool smudge:{false,true}) {
+            auto changed=Arc::warpStroke(layer,path,brush,d.size,{},smudge);
+            QVERIFY(changed.pixelColor(19,12).red()>0); QCOMPARE(changed.pixelColor(31,0),QColor(Qt::blue));
+            QPainterPath selection; selection.addRect(0,0,17,24);
+            auto limited=Arc::warpStroke(layer,path,brush,d.size,selection,smudge); QCOMPARE(limited.pixelColor(19,12),QColor(Qt::blue));
+        }
+        Canvas canvas; canvas.resize(640,480); canvas.show(); canvas.setDocument(d); canvas.fit(); canvas.setBrush(brush);
+        QSignalSpy painted(&canvas,&Canvas::painted);
+        for(auto tool:{Canvas::Tool::Smudge,Canvas::Tool::Liquify}) {
+            canvas.setDocument(d); canvas.setTool(tool);
+            auto from=canvas.canvasToWidget({12,12}).toPoint(),to=canvas.canvasToWidget({22,12}).toPoint();
+            QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,from); QTest::mouseMove(&canvas,to); QTest::keyClick(&canvas,Qt::Key_Escape);
+            QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,to); QCOMPARE(painted.count(),0);
+            QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,from); QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,to);
+            QCOMPARE(painted.count(),1); QVERIFY(qvariant_cast<QImage>(painted[0][1])!=layer.image); painted.clear();
+        }
+    }
     void contentFillBeyondLayerBounds() {
         auto d=sample(); auto original=d.layers[0]; QPainterPath path; path.addRect(18,3,6,12);
         auto changed=Arc::contentAwareFillExpanded(original,path,Arc::pathCoverage(path,d.size));
@@ -880,7 +944,10 @@ private slots:
         QTemporaryDir temp; QString path = temp.filePath("legacy.comp"); QVERIFY(QDir().mkpath(path));
         QByteArray json = R"({"format":"com.compositor.project","version":1,"colorSpace":"sRGB","documentID":"8BC1E57D-577A-46ED-A87E-D38934E3DE21","width":20,"height":30,"layers":[{"id":"8BC1E57D-577A-46ED-A87E-D38934E3DE22","name":"Blank","isVisible":true,"transform":{"origin":[0,0],"size":[20,30],"rotation":0,"flipX":false,"flipY":false,"sampling":"High quality"}}]})";
         writeMetadata(path, QJsonDocument::fromJson(json).object());
-        auto d = Arc::loadProject(path); QCOMPARE(d.size, QSize(20,30)); QCOMPARE(d.layers.size(), 1); QVERIFY(d.layers[0].image.isNull());
+        for(int version=1;version<=8;++version) {
+            auto manifest=QJsonDocument::fromJson(json).object(); manifest["version"]=version; writeMetadata(path,manifest);
+            auto d=Arc::loadProject(path); QCOMPARE(d.size,QSize(20,30)); QCOMPARE(d.layers.size(),1); QVERIFY(d.layers[0].image.isNull());
+        }
     }
     void preserveUnrecognizedFilesOnSave() {
         QTemporaryDir temp; QString path = temp.filePath("art.comp");

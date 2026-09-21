@@ -118,6 +118,7 @@ void validate(const Document &d) {
     QSet<QUuid> ids;
     qint64 pixels = 0, maskPixels = 0;
     for (const auto &l : d.layers) {
+        require(!l.name.trimmed().isEmpty() && l.name.toUtf8().size()<=16384, "Layer names must contain text and fit within 16 KiB.");
         validateStyles(l); validateMaskPlacement(l); validateEffects(l.effects);
         require(l.effects.isEmpty() || (!l.isGroup && l.adjustment.isEmpty()), "Effects require a raster layer.");
         if(!l.adjustment.isEmpty()) {
