@@ -10,6 +10,8 @@ constexpr qint64 MaxPixels = 100000000;
 struct Layer {
     QUuid id = QUuid::createUuid();
     QString name;
+    QUuid parentID;
+    bool isGroup = false;
     QImage image;
     QJsonObject shape, text; // Editable source; image remains the portable raster fallback.
     QImage mask; // Grayscale8 coverage, normalized to the layer bounds.
@@ -38,6 +40,7 @@ struct Document {
     int active = -1;
     bool operator==(const Document &other) const;
 };
+QSize maskEditingSize(const Layer &layer);
 QStringList blendModes();
 void validate(const Document &document);
 QImage readImage(const QString &path);

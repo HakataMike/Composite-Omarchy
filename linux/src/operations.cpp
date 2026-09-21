@@ -98,15 +98,19 @@ QPointF snapLayerOrigin(const Document &d, int index, QPointF origin, double tol
 void mergeDown(Document &d) {
     if (d.active <= 0) throw std::runtime_error("Select a layer with another layer beneath it.");
     int top = d.active;
-    if (d.layers[top].blend != "Normal" || d.layers[top-1].blend != "Normal")
+    int bottom=top-1;
+    while(bottom>=0 && d.layers[bottom].parentID!=d.layers[top].parentID) --bottom;
+    if(bottom<0 || d.layers[top].isGroup || d.layers[bottom].isGroup)
+        throw std::runtime_error("Merge Down needs two raster siblings. Use Merge Folder for a folder.");
+    if (d.layers[top].blend != "Normal" || d.layers[bottom].blend != "Normal")
         throw std::runtime_error("Set both layers to Normal before merging. Other modes depend on the layers below them.");
     QRectF extent = d.layers[top].transform().mapRect(QRectF(QPointF(),d.layers[top].size))
-        .united(d.layers[top-1].transform().mapRect(QRectF(QPointF(),d.layers[top-1].size)));
+        .united(d.layers[bottom].transform().mapRect(QRectF(QPointF(),d.layers[bottom].size)));
     QRect bounds = extent.toAlignedRect(); checkSize(bounds.size());
-    Document pair = d; pair.layers = {d.layers[top-1],d.layers[top]}; pair.active = 1; pair.size = bounds.size();
-    for (auto &layer : pair.layers) layer.origin -= bounds.topLeft();
-    Layer merged; merged.name = d.layers[top].name; merged.image = render(pair); merged.size = bounds.size(); merged.origin = bounds.topLeft();
-    d.layers[top-1] = merged; d.layers.removeAt(top); d.active = top-1; validate(d);
+    Document pair = d; pair.layers = {d.layers[bottom],d.layers[top]}; pair.active = 1; pair.size = bounds.size();
+    for (auto &layer : pair.layers) { layer.origin -= bounds.topLeft(); layer.parentID={}; }
+    Layer merged; merged.parentID=d.layers[top].parentID; merged.name = d.layers[top].name; merged.image = render(pair); merged.size = bounds.size(); merged.origin = bounds.topLeft();
+    d.layers[bottom] = merged; d.layers.removeAt(top); d.active = bottom; validate(d);
 }
 QImage blurImage(const QImage &image, int radius) {
     if (radius < 0 || radius > 250) throw std::runtime_error("Blur radius must be between 0 and 250.");

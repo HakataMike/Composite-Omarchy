@@ -104,6 +104,7 @@ void Window::textDialog(QRectF bounds, QColor color, bool editActive) {
             double sy=index>=0 ? result.size.height()/result.image.height() : 1;
             result.text=style; result.image=Arc::textImage(style);
             result.size={result.image.width()*sx,result.image.height()*sy};
+            if(index<0 && original.active>=0) result.parentID=original.layers[original.active].isGroup ? original.layers[original.active].id : original.layers[original.active].parentID;
             if(index<0) { result.name=content.toPlainText().left(40); result.origin=bounds.topLeft(); }
             auto preview=original;
             if(index>=0) preview.layers[index]=result;

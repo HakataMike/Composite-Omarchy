@@ -1,6 +1,7 @@
 #include "document.h"
 #include "styles.h"
 #include "blending.h"
+#include "hierarchy.h"
 #include <algorithm>
 #include <QColorSpace>
 #include <QDir>
@@ -71,11 +72,17 @@ void safeFile(const QString &path, const QString &root, qint64 limit) {
         && info.canonicalFilePath().startsWith(root + '/'), "Missing, unsafe, or oversized project asset: " + info.fileName());
 }
 }
+QSize maskEditingSize(const Layer &layer) {
+    if(!layer.image.isNull()) return layer.image.size();
+    QSize result=layer.size.toSize();
+    require(validSize(result), "Mask exceeds supported dimensions.");
+    return result;
+}
 QStringList blendModes() {
     return {"Normal", "Multiply", "Screen", "Overlay", "Darken", "Lighten", "Difference", "Color Dodge", "Color Burn", "Soft Light", "Hue", "Saturation", "Color", "Luminosity"};
 }
 bool Layer::operator==(const Layer &o) const {
-    return id == o.id && name == o.name && image == o.image && origin == o.origin && size == o.size
+    return id == o.id && parentID == o.parentID && isGroup == o.isGroup && name == o.name && image == o.image && origin == o.origin && size == o.size
         && rotation == o.rotation && flipX == o.flipX && flipY == o.flipY && visible == o.visible
         && shape == o.shape && text == o.text && mask == o.mask && maskEnabled == o.maskEnabled
         && opacity == o.opacity && blend == o.blend && sampling == o.sampling;
@@ -103,6 +110,7 @@ void validate(const Document &d) {
             && std::isfinite(guide.position) && std::abs(guide.position) <= 1000000, "Invalid guide.");
         guideIds.insert(guide.id);
     }
+    validateHierarchy(d);
     QSet<QUuid> ids;
     qint64 pixels = 0, maskPixels = 0;
     for (const auto &l : d.layers) {
@@ -144,6 +152,7 @@ void paint(QPainter &p, const Document &d, QRect region) {
     if (region.isNull()) region = QRect(QPoint(), d.size);
     p.save();
     p.setClipRect(region.intersected(QRect(QPoint(), d.size)), Qt::IntersectClip);
+    if(std::any_of(d.layers.begin(),d.layers.end(),[](const auto &l) { return l.isGroup; })) { paint(p,flattenGroups(d),region); p.restore(); return; }
     if(hasNonseparableBlend(d)) {
         p.drawImage(QPoint(),render(d)); p.restore(); return;
     }
@@ -205,7 +214,7 @@ void repaintRegion(QImage &image, const Document &d, QRect region) {
             "Invalid canvas preview cache.");
     region = region.intersected(QRect(QPoint(),d.size));
     if (region.isEmpty()) return;
-    if(hasNonseparableBlend(d)) { image=render(d); return; }
+    if(hasNonseparableBlend(d) || std::any_of(d.layers.begin(),d.layers.end(),[](const auto &l) { return l.isGroup; })) { image=render(d); return; }
     for (const auto &layer : d.layers) {
         if (!layer.visible || layer.image.isNull()) continue;
         if (layer.rotation != 0 || layer.flipX || layer.flipY || layer.size != QSizeF(layer.image.size())
@@ -226,6 +235,7 @@ void repaintRegion(QImage &image, const Document &d, QRect region) {
 }
 QImage render(const Document &d, bool whiteBackground) {
     validate(d);
+    if(std::any_of(d.layers.begin(),d.layers.end(),[](const auto &l) { return l.isGroup; })) return render(flattenGroups(d),whiteBackground);
     QImage result(d.size, QImage::Format_ARGB32_Premultiplied);
     require(!result.isNull(), "Insufficient memory to render canvas.");
     result.fill(Qt::transparent);
@@ -290,9 +300,10 @@ Document loadProject(const QString &path) {
         require(value.isObject(), "Invalid layer record.");
         const auto r = value.toObject();
         keys(r, {"id", "name", "isVisible", "transform", "imageFile", "opacity", "blendMode", "parentID", "isGroup", "maskFile", "maskEnabled", "shape", "text"});
-        require((!r.contains("parentID") || r["parentID"].isNull())
-            && (!r.contains("isGroup") || (r["isGroup"].isBool() && !r["isGroup"].toBool())), "Groups are not supported in this preview.");
         Layer l;
+        if(r.contains("parentID") && !r["parentID"].isNull()) l.parentID=uuid(r["parentID"]);
+        if(r.contains("isGroup")) l.isGroup=boolean(r["isGroup"]);
+        require(version>=2 || (!l.isGroup && l.parentID.isNull()), "Folders require project version 2.");
         l.id = uuid(r["id"]);
         require(r["name"].isString() && r["transform"].isObject(), "Invalid layer metadata.");
         l.name = r["name"].toString(); l.visible = boolean(r["isVisible"]);
@@ -307,6 +318,7 @@ Document loadProject(const QString &path) {
         require(version >= 3 || (l.opacity == 1 && l.blend == "Normal"), "Appearance is invalid for this project version.");
         QString asset;
         if (r.contains("imageFile") && !r["imageFile"].isNull()) {
+            require(!l.isGroup, "Folders cannot have source images.");
             asset = r["imageFile"].toString();
             require(asset == r["id"].toString() + ".png", "Unsafe image filename.");
         }
@@ -318,7 +330,7 @@ Document loadProject(const QString &path) {
         }
         QString maskFile;
         if (r.contains("maskFile")) {
-            require(version >= 4 && r["maskFile"].isString(), "Invalid mask metadata for this project version.");
+            require(version >= (l.isGroup ? 6 : 4) && r["maskFile"].isString(), "Invalid mask metadata for this project version.");
             maskFile = r["maskFile"].toString();
             require(maskFile == r["id"].toString() + ".mask.png", "Unsafe mask filename.");
         }
@@ -401,8 +413,10 @@ void saveProject(const Document &d, const QString &path) {
         if (!l.mask.isNull()) {
             QString name = idString(l.id) + ".mask.png";
             require(l.mask.save(staging.path() + "/images/" + name, "PNG"), "Could not write layer mask.");
-            r["maskFile"] = name; r["maskEnabled"] = l.maskEnabled; version = std::max(version,4);
+            r["maskFile"] = name; r["maskEnabled"] = l.maskEnabled; version = std::max(version,l.isGroup ? 6 : 4);
         }
+        if(l.isGroup) r["isGroup"]=true;
+        if(!l.parentID.isNull()) r["parentID"]=idString(l.parentID);
         if(!l.shape.isEmpty()) { r["shape"]=l.shape; version=8; }
         if(!l.text.isEmpty()) { r["text"]=l.text; version=8; }
         layers.append(r);

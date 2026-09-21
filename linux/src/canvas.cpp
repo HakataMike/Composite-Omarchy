@@ -2,6 +2,7 @@
 #include "selection.h"
 #include "retouch.h"
 #include "operations.h"
+#include "hierarchy.h"
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QKeyEvent>
@@ -214,7 +215,7 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
     }
     if (tool == Tool::Brush || tool == Tool::Eraser || tool==Tool::Gradient || tool==Tool::Clone || tool==Tool::Heal || tool==Tool::Blur) {
         int index = document.active;
-        if (index < 0 || document.layers[index].image.isNull() || !document.layers[index].visible) {
+        if (index < 0 || (document.layers[index].image.isNull() && !(document.layers[index].isGroup && maskTarget)) || !Arc::effectiveVisible(document,index)) {
             emit errorOccurred("Select a visible image layer, or add a paint layer, before painting.");
             return;
         }
@@ -228,7 +229,7 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
             if(!cloneAligned || !cloneOffset) cloneOffset=*cloneAnchor-documentPoint(event->position());
             try {
             if(cloneAll) cloneSample=composite;
-            else { auto single=document; single.layers={document.layers[index]}; single.active=0; single.layers[0].opacity=1; single.layers[0].blend="Normal"; single.layers[0].maskEnabled=false; cloneSample=Arc::render(single); }
+            else { auto single=document; single.layers={document.layers[index]}; single.active=0; single.layers[0].parentID={}; single.layers[0].opacity=1; single.layers[0].blend="Normal"; single.layers[0].maskEnabled=false; cloneSample=Arc::render(single); }
             } catch(const std::exception &error) { cloneSample=QImage(); emit errorOccurred(QString::fromUtf8(error.what())); return; }
         }
         dragLayer = index;
@@ -241,14 +242,18 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
     }
     int hit = -1;
     auto point = documentPoint(event->position());
-    for (int i = document.layers.size()-1; i >= 0; --i) {
+    for (int i : Arc::visibleLayerOrder(document,true)) {
         const auto &l = document.layers[i];
-        if (l.visible && !l.image.isNull() && QRectF(QPointF(), l.size).contains(l.transform().inverted().map(point))) { hit = i; break; }
+        if (!l.image.isNull() && QRectF(QPointF(), l.size).contains(l.transform().inverted().map(point))) { hit = i; break; }
+    }
+    if(document.active>=0 && document.layers[document.active].isGroup && Arc::effectiveVisible(document,document.active)) {
+        const auto &group=document.layers[document.active];
+        if(QRectF(QPointF(),group.size).contains(group.transform().inverted().map(point))) hit=document.active;
     }
     emit selected(hit);
     // Selection may synchronously replace the displayed document.
     if (hit >= 0) {
-        dragLayer = hit; originalOrigin = document.layers[hit].origin; dragging = true;
+        dragOriginal=document; dragLayer = hit; originalOrigin = document.layers[hit].origin; dragging = true;
     }
 }
 void Canvas::mouseDoubleClickEvent(QMouseEvent *event) {
@@ -280,7 +285,10 @@ void Canvas::mouseMoveEvent(QMouseEvent *event) {
             }
             point=snapped;
         }
-        document.layers[dragLayer].origin = {std::clamp(point.x(), -1000000.0, 1000000.0), std::clamp(point.y(), -1000000.0, 1000000.0)};
+        auto changed=dragOriginal.layers[dragLayer];
+        changed.origin={std::clamp(point.x(),-1000000.0,1000000.0),std::clamp(point.y(),-1000000.0,1000000.0)};
+        document=dragOriginal;
+        Arc::transformGroup(document,dragLayer,changed);
         refreshImage();
     }
 }
@@ -364,7 +372,7 @@ void Canvas::cancelGesture() {
         refreshImage();
     }
     if (selecting) { selection = previousSelection; selecting = false; previousSelection.reset(); update(); }
-    if (dragging) { document.layers[dragLayer].origin = originalOrigin; dragging = false; dragLayer = -1; refreshImage(); }
+    if (dragging) { document=dragOriginal; dragging = false; dragLayer = -1; refreshImage(); }
     panning = false; unsetCursor();
 }
 void Canvas::keyPressEvent(QKeyEvent *event) {

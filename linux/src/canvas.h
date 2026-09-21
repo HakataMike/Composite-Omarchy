@@ -60,6 +60,7 @@ private:
     QPointF draftAnchor, draftStart, draftEnd;
     void updateDraft(QPointF point, Qt::KeyboardModifiers modifiers);
     bool space = false, panning = false, dragging = false;
+    Arc::Document dragOriginal;
     int dragLayer = -1;
     bool guidesVisible = true, guidesLocked = false, snapping = false;
     int dragGuide = -1;

@@ -39,7 +39,7 @@ QImage mix(const QImage &source,const QImage &changed,const QImage &coverage) {
 }
 QImage gradientStroke(const Layer &layer,QPointF start,QPointF end,const Brush &brush,QColor background,QRectF clip,const QPainterPath &selection,bool mask) {
     QImage image=mask ? layer.mask : layer.image;
-    if(mask && image.size()==QSize(1,1)) image=image.scaled(layer.image.size());
+    if(mask && image.size()==QSize(1,1)) image=image.scaled(maskEditingSize(layer));
     if(start==end) return image;
     if(image.isNull()) throw std::runtime_error("Select a raster layer or mask for the gradient.");
     QColor foreground=brush.color;

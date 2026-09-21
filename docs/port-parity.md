@@ -10,7 +10,7 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 - [ ] Linux packaging, launcher, release build and installation instructions
 
 ## Layer workflow
-- [ ] Folders, nesting/reordering, group transforms and masks
+- [ ] Folders, nesting/reordering, group transforms and masks (implemented; nonuniform shear and broader drag/drop acceptance remain)
 - [ ] Clipping masks and unlinked mask transforms
 - [x] Mask fill/invert/blur/feather (Gaussian approximation documented)
 - [ ] Merge Down / Merge Layers / Merge Group

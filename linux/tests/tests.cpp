@@ -14,6 +14,8 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QListWidget>
+#include <QTreeWidget>
+#include "../src/hierarchy.h"
 #include <QDoubleSpinBox>
 #include <QAction>
 #include <QMessageBox>
@@ -39,6 +41,52 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void folderRenderingAndRoundTrip() {
+        auto d=sample();
+        Arc::Layer folder; folder.isGroup=true; folder.name="Folder"; folder.size=d.size; folder.opacity=0.5;
+        d.layers[0].parentID=folder.id; d.layers.append(folder); d.active=1;
+        QCOMPARE(Arc::render(d).pixelColor(4,5),QColor(255,0,0,127));
+        folder.visible=false; d.layers[1]=folder; QCOMPARE(Arc::render(d).pixelColor(4,5).alpha(),0);
+        folder.visible=true; folder.opacity=1; folder.mask=QImage(1,1,QImage::Format_Grayscale8); folder.mask.fill(Qt::black);
+        d.layers[1]=folder; QCOMPARE(Arc::render(d).pixelColor(4,5).alpha(),0);
+        folder.mask.fill(Qt::white); d.layers[1]=folder; QCOMPARE(Arc::render(d).pixelColor(4,5),QColor(Qt::red));
+        QPainterPath path; path.moveTo(4,5); Arc::Brush brush; brush.diameter=4;
+        d.layers[1].mask=Arc::paintMaskStroke(folder,path,brush,QRectF(QPointF(),d.size));
+        QCOMPARE(d.layers[1].mask.size(),d.size); QCOMPARE(Arc::render(d).pixelColor(4,5).alpha(),0);
+        QTemporaryDir temp; auto file=temp.filePath("folder.comp"); Arc::saveProject(d,file);
+        auto loaded=Arc::loadProject(file); QCOMPARE(loaded.layers,d.layers); QCOMPARE(Arc::render(loaded),Arc::render(d));
+        loaded.layers[1].parentID=folder.id;
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error,Arc::validate(loaded));
+        loaded=d; loaded.layers[0].parentID=QUuid::createUuid();
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error,Arc::validate(loaded));
+    }
+    void folderOperations() {
+        auto d=sample(); auto second=d.layers[0]; second.id=QUuid::createUuid(); second.origin={10,10};
+        d.layers.append(second); d.active=1; auto before=Arc::render(d);
+        Arc::groupLayers(d,{d.layers[0].id,d.layers[1].id});
+        QCOMPARE(d.layers.size(),3); QVERIFY(d.layers[d.active].isGroup); QCOMPARE(Arc::render(d),before);
+        int index=d.active; auto moved=d.layers[index]; moved.origin+={4,5};
+        Arc::transformGroup(d,index,moved); QCOMPARE(d.layers[0].origin,QPointF(6,8)); QCOMPARE(d.layers[1].origin,QPointF(14,15));
+        Arc::duplicateLayer(d); QCOMPARE(d.layers.size(),6); QCOMPARE(Arc::descendants(d,d.layers[d.active].id).size(),2);
+        Arc::deleteLayer(d); QCOMPARE(d.layers.size(),3);
+        for(int i=0;i<d.layers.size();++i) if(d.layers[i].isGroup) d.active=i;
+        before=Arc::render(d); Arc::mergeFolder(d); QCOMPARE(d.layers.size(),1); QCOMPARE(Arc::render(d),before);
+    }
+    void folderTreeAndUndo() {
+        QTemporaryDir temp; auto file=temp.filePath("folder.comp"); Arc::saveProject(sample(),file);
+        Window window; window.show(); window.openProject(file);
+        QAction *group=nullptr,*undo=nullptr,*save=nullptr;
+        for(auto *a:window.findChildren<QAction *>()) {
+            if(a->text()=="Group selected layers") group=a;
+            if(a->shortcut()==QKeySequence::Undo) undo=a;
+            if(a->text()=="&Save project") save=a;
+        }
+        QVERIFY(group); QVERIFY(undo); QVERIFY(save);
+        auto *tree=window.findChild<QTreeWidget *>("layers"); group->trigger();
+        QCOMPARE(tree->topLevelItemCount(),1); QCOMPARE(tree->topLevelItem(0)->childCount(),1);
+        save->trigger(); QVERIFY(Arc::loadProject(file).layers.last().isGroup);
+        undo->trigger(); QCOMPARE(tree->topLevelItem(0)->childCount(),0); save->trigger();
+    }
     void nonseparableBlendReferenceColors() {
         QImage backdrop(1,1,QImage::Format_ARGB32_Premultiplied),source(1,1,QImage::Format_ARGB32_Premultiplied);
         source.fill(QColor(32,128,192));
@@ -183,7 +231,7 @@ private slots:
         canvas->setTool(Canvas::Tool::ShapeEllipse);
         QTest::mousePress(canvas,Qt::LeftButton,Qt::NoModifier,point({30,30}));
         QTest::mouseRelease(canvas,Qt::LeftButton,Qt::ShiftModifier,point({80,60}));
-        auto *list=window.findChild<QListWidget *>("layers"); QCOMPARE(list->count(),1);
+        auto *list=window.findChild<QTreeWidget *>("layers"); QCOMPARE(list->topLevelItemCount(),1);
         QAction *save=nullptr,*undo=nullptr;
         for(auto *action:window.findChildren<QAction *>()) {
             if(action->text()=="&Save project") save=action;
@@ -205,7 +253,7 @@ private slots:
         auto point=canvas->canvasToWidget({20,20}).toPoint();
         QTimer::singleShot(0,[] { auto *dialog=qobject_cast<QDialog *>(QApplication::activeModalWidget()); QVERIFY(dialog); dialog->reject(); });
         QTest::mouseClick(canvas,Qt::LeftButton,Qt::NoModifier,point);
-        QCOMPARE(window.findChild<QListWidget *>("layers")->count(),0);
+        QCOMPARE(window.findChild<QTreeWidget *>("layers")->topLevelItemCount(),0);
         QTimer::singleShot(0,[] {
             auto *dialog=qobject_cast<QDialog *>(QApplication::activeModalWidget()); QVERIFY(dialog);
             auto *content=dialog->findChild<QPlainTextEdit *>("textContent"); QVERIFY(content);
@@ -213,7 +261,7 @@ private slots:
             QTimer::singleShot(180,dialog,&QDialog::accept);
         });
         QTest::mouseClick(canvas,Qt::LeftButton,Qt::NoModifier,point);
-        QCOMPARE(window.findChild<QListWidget *>("layers")->count(),1);
+        QCOMPARE(window.findChild<QTreeWidget *>("layers")->topLevelItemCount(),1);
         for(auto *action:window.findChildren<QAction *>()) if(action->text()=="&Save project") action->trigger();
         QCOMPARE(Arc::loadProject(path).layers[0].text["content"].toString(),QString("Editable text"));
     }
@@ -464,7 +512,7 @@ private slots:
         Window window; window.show(); QVERIFY(QTest::qWaitForWindowExposed(&window));
         auto *add = window.findChild<QPushButton *>("addPaintLayer"); QVERIFY(add); QTest::mouseClick(add,Qt::LeftButton);
         auto *canvas = window.findChild<Canvas *>(); canvas->fit(); canvas->setTool(Canvas::Tool::Brush);
-        auto *list = window.findChild<QListWidget *>("layers"); QCOMPARE(list->count(), 1);
+        auto *list = window.findChild<QTreeWidget *>("layers"); QCOMPARE(list->topLevelItemCount(), 1);
         QSignalSpy painted(canvas, &Canvas::painted);
         QPoint start = canvas->canvasToWidget({100,100}).toPoint();
         QTest::mousePress(canvas,Qt::LeftButton,Qt::NoModifier,start);
@@ -478,9 +526,9 @@ private slots:
         QCOMPARE(Arc::loadProject(path).layers[0].image, image);
         QAction *undo = nullptr;
         for (auto *action : window.findChildren<QAction *>()) if (action->shortcut() == QKeySequence::Undo) undo = action;
-        QVERIFY(undo); undo->trigger(); QCOMPARE(list->count(), 1);
+        QVERIFY(undo); undo->trigger(); QCOMPARE(list->topLevelItemCount(), 1);
         QVERIFY(window.isWindowModified()); // The new layer remains; one stroke was one edit.
-        undo->trigger(); QCOMPARE(list->count(), 0); QVERIFY(!window.isWindowModified());
+        undo->trigger(); QCOMPARE(list->topLevelItemCount(), 0); QVERIFY(!window.isWindowModified());
     }
     void maskRenderingAndPersistence() {
         auto d = sample(); auto source = d.layers[0].image;
@@ -695,7 +743,7 @@ private slots:
         QTemporaryDir temp; auto image = sample().layers[0].image; QVERIFY(image.save(temp.filePath("red.png")));
         Window window; window.show(); QVERIFY(QTest::qWaitForWindowExposed(&window));
         window.importImages({temp.filePath("red.png")});
-        auto *list = window.findChild<QListWidget *>("layers"); QCOMPARE(list->count(), 1);
+        auto *list = window.findChild<QTreeWidget *>("layers"); QCOMPARE(list->topLevelItemCount(), 1);
         auto *x = window.findChild<QDoubleSpinBox *>("layerX"); x->setValue(15); QCOMPARE(x->value(), 15.0);
         QAction *undo = nullptr, *redo = nullptr;
         for (auto *action : window.findChildren<QAction *>()) {
@@ -703,9 +751,9 @@ private slots:
             if (action->shortcut() == QKeySequence("Ctrl+Shift+Z")) redo = action;
         }
         QVERIFY(undo); QVERIFY(redo); undo->trigger(); QCOMPARE(x->value(), 0.0); redo->trigger(); QCOMPARE(x->value(), 15.0);
-        list->item(0)->setText("Renamed"); QCOMPARE(list->item(0)->text(), QString("Renamed"));
-        undo->trigger(); QCOMPARE(list->item(0)->text(), QString("red"));
-        undo->trigger(); undo->trigger(); QCOMPARE(list->count(), 0);
+        list->topLevelItem(0)->setText(0,"Renamed"); QCOMPARE(list->topLevelItem(0)->text(0), QString("Renamed"));
+        undo->trigger(); QCOMPARE(list->topLevelItem(0)->text(0), QString("red"));
+        undo->trigger(); undo->trigger(); QCOMPARE(list->topLevelItemCount(), 0);
         QVERIFY(!window.isWindowModified());
     }
 };

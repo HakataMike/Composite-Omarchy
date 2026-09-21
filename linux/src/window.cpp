@@ -3,6 +3,9 @@
 #include "selection.h"
 #include "filters.h"
 #include "styles.h"
+#include "hierarchy.h"
+#include "layer_tree.h"
+#include <QStyle>
 #include <QJsonArray>
 #include <QTimer>
 #include <QPlainTextEdit>
@@ -24,7 +27,7 @@
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QLabel>
-#include <QListWidget>
+#include <QTreeWidgetItemIterator>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPushButton>
@@ -84,6 +87,34 @@ Window::Window() {
         editLayer("Content-aware fill",[&](auto &layer) { layer.image=Arc::contentAwareFill(layer,*selection); Arc::rasterize(layer); });
     });
     auto *layerMenu = menuBar()->addMenu("&Layer");
+    layerMenu->addAction("Group selected layers",QKeySequence("Ctrl+G"),this,[this] {
+        QVector<QUuid> ids;
+        for(auto *item:layers->selectedItems()) ids.append(item->data(0,Qt::UserRole+1).toUuid());
+        edit("Group layers",[&](auto &d) { Arc::groupLayers(d,ids); });
+    });
+    layerMenu->addAction("Add folder",this,[this] {
+        edit("Add folder",[](auto &d) {
+            Arc::Layer group; group.isGroup=true; group.name="Folder"; group.size=d.size;
+            if(d.active>=0) group.parentID=d.layers[d.active].isGroup ? d.layers[d.active].id : d.layers[d.active].parentID;
+            d.layers.append(group); d.active=d.layers.size()-1;
+        });
+    });
+    layerMenu->addAction("Merge folder",this,[this] { edit("Merge folder",Arc::mergeFolder); });
+    layerMenu->addAction("Scale layer / folder…",this,[this] {
+        bool ok=false; double percent=QInputDialog::getDouble(this,"Scale layer / folder","Scale (%)",100,0.01,10000,2,&ok);
+        if(ok) editLayer("Scale layer / folder",[=](auto &l) {
+            auto center=l.origin+QPointF(l.size.width()/2,l.size.height()/2);
+            l.size*=percent/100; l.origin=center-QPointF(l.size.width()/2,l.size.height()/2);
+            if(!l.shape.isEmpty()) l.image=Arc::shapeImage(l.shape,l.size);
+        });
+    });
+    layerMenu->addAction("Move out of folder",this,[this] {
+        edit("Move out of folder",[](auto &d) {
+            if(d.active<0 || d.layers[d.active].parentID.isNull()) return;
+            auto parent=d.layers[d.active].parentID;
+            for(const auto &layer:d.layers) if(layer.id==parent) { d.layers[d.active].parentID=layer.parentID; break; }
+        });
+    });
     layerMenu->addAction("Edit shape…",this,&Window::shapeDialog);
     layerMenu->addAction("Edit text…",this,[this] { textDialog({},Qt::black,true); });
     layerMenu->addAction("Merge down",QKeySequence("Ctrl+E"),this,[this] { edit("Merge down",Arc::mergeDown); });
@@ -140,6 +171,7 @@ Window::Window() {
     editMenu->addAction("Paste image as layer",QKeySequence::Paste,this,[this] {
         auto image=QApplication::clipboard()->image(); if(image.isNull()) return;
         edit("Paste image",[&](auto &d) { Arc::Layer layer; layer.image=image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+            if(d.active>=0) layer.parentID=d.layers[d.active].isGroup ? d.layers[d.active].id : d.layers[d.active].parentID;
             layer.name="Pasted image"; layer.size=image.size(); d.layers.append(layer); d.active=d.layers.size()-1; });
     });
     addToolBarBreak();
@@ -233,14 +265,15 @@ Window::Window() {
     dock->setFeatures(QDockWidget::NoDockWidgetFeatures); dock->setMinimumWidth(265);
     auto *panel = new QWidget; auto *layout = new QVBoxLayout(panel);
     auto *hint = new QLabel("Top layer appears first.\nDouble-click a name to rename."); layout->addWidget(hint);
-    layers = new QListWidget; layers->setObjectName("layers"); layers->setAccessibleName("Layers"); layout->addWidget(layers, 1);
+    layers = new LayerTree; layers->setObjectName("layers"); layers->setAccessibleName("Layers"); layout->addWidget(layers, 1);
     auto *paintLayer = new QPushButton("Add paint layer"); paintLayer->setObjectName("addPaintLayer"); layout->addWidget(paintLayer);
     connect(paintLayer, &QPushButton::clicked, this, [this] {
         edit("Add paint layer", [](auto &d) {
             qint64 pixels = qint64(d.size.width()) * d.size.height();
             for (const auto &layer : d.layers) pixels += qint64(layer.image.width()) * layer.image.height();
             if (pixels > Arc::MaxPixels) throw std::runtime_error("A new paint layer would exceed the 100-megapixel source limit.");
-            Arc::Layer layer; layer.name = "Paint layer"; layer.size = d.size;
+            Arc::Layer layer; if(d.active>=0) layer.parentID=d.layers[d.active].isGroup ? d.layers[d.active].id : d.layers[d.active].parentID;
+            layer.name = "Paint layer"; layer.size = d.size;
             layer.image = QImage(d.size, QImage::Format_ARGB32_Premultiplied);
             if (layer.image.isNull()) throw std::runtime_error("Insufficient memory for paint layer.");
             layer.image.fill(Qt::transparent); layer.image.setColorSpace(QColorSpace::SRgb);
@@ -252,10 +285,10 @@ Window::Window() {
     auto button = [&](const QString &label, auto callback) {
         auto *b = new QPushButton(label); buttons->addWidget(b); connect(b, &QPushButton::clicked, this, callback);
     };
-    button("+ Copy", [this] { edit("Duplicate layer", [](auto &d) { if (d.active < 0) return; auto l = d.layers[d.active]; l.id = QUuid::createUuid(); l.name += " copy"; d.layers.insert(++d.active, l); }); });
-    button("−", [this] { edit("Delete layer", [](auto &d) { if (d.active < 0) return; d.layers.removeAt(d.active); d.active = std::min(d.active, int(d.layers.size())-1); }); });
-    button("↑", [this] { edit("Raise layer", [](auto &d) { if (d.active >= 0 && d.active+1 < d.layers.size()) { d.layers.swapItemsAt(d.active, d.active+1); ++d.active; } }); });
-    button("↓", [this] { edit("Lower layer", [](auto &d) { if (d.active > 0) { d.layers.swapItemsAt(d.active, d.active-1); --d.active; } }); });
+    button("+ Copy", [this] { edit("Duplicate layer", Arc::duplicateLayer); });
+    button("−", [this] { edit("Delete layer", Arc::deleteLayer); });
+    button("↑", [this] { edit("Raise layer", [](auto &d) { Arc::reorderLayer(d,true); }); });
+    button("↓", [this] { edit("Lower layer", [](auto &d) { Arc::reorderLayer(d,false); }); });
     layout->addLayout(buttons);
     auto *maskRow = new QHBoxLayout;
     addMask = new QPushButton("Add mask"); addMask->setObjectName("addMask");
@@ -301,23 +334,38 @@ Window::Window() {
     connect(flipX, &QPushButton::clicked, this, [this] { editLayer("Flip horizontal", [](auto &l) { l.flipX = !l.flipX; }); });
     connect(flipY, &QPushButton::clicked, this, [this] { editLayer("Flip vertical", [](auto &l) { l.flipY = !l.flipY; }); });
     layout->addWidget(inspector); dock->setWidget(panel); addDockWidget(Qt::RightDockWidgetArea, dock);
-    connect(layers, &QListWidget::currentRowChanged, this, [this](int row) {
-        if (refreshing) return;
-        document.active = row < 0 ? -1 : document.layers.size()-1-row;
+    connect(layers, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *item) {
+        if(refreshing) return;
+        document.active=item ? item->data(0,Qt::UserRole).toInt() : -1;
         refresh();
     });
-    connect(layers, &QListWidget::itemChanged, this, [this](QListWidgetItem *item) {
-        if (refreshing) return;
-        int index = document.layers.size()-1-layers->row(item);
-        QString name = item->text(); bool visible = item->checkState() == Qt::Checked;
-        edit("Layer properties", [=](auto &d) { d.layers[index].name = name; d.layers[index].visible = visible; });
+    connect(layers, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem *item) {
+        if(refreshing) return;
+        int index=item->data(0,Qt::UserRole).toInt();
+        QString name=item->text(0); bool visible=item->checkState(0)==Qt::Checked;
+        edit("Layer properties",[=](auto &d) { d.layers[index].name=name; d.layers[index].visible=visible; });
+    });
+    connect(layers,&LayerTree::orderChanged,this,[this] {
+        QVector<Arc::Layer> ordered;
+        QUuid active=document.active>=0 ? document.layers[document.active].id : QUuid();
+        std::function<void(QTreeWidgetItem *,QUuid)> collect=[&](QTreeWidgetItem *parent,QUuid parentID) {
+            for(int row=parent->childCount()-1;row>=0;--row) {
+                auto *item=parent->child(row);
+                auto layer=document.layers[item->data(0,Qt::UserRole).toInt()]; layer.parentID=parentID;
+                ordered.append(layer); collect(item,layer.id);
+            }
+        };
+        collect(layers->invisibleRootItem(),{});
+        edit("Reorder layers",[&](auto &d) { d.layers=ordered; for(int i=0;i<d.layers.size();++i) if(d.layers[i].id==active) d.active=i; });
+        refresh();
     });
     connect(canvas, &Canvas::shapeCreated, this, [this](QString kind,QPointF start,QPointF end,QColor color) {
         edit("Add shape",[&](auto &d) {
             auto box=QRectF(start,end).normalized();
             if(kind=="Line") box.adjust(-2,-2,2,2);
             if(box.width()<1 || box.height()<1) return;
-            Arc::Layer layer; layer.name=kind; layer.origin=box.topLeft(); layer.size=box.size();
+            Arc::Layer layer; if(d.active>=0) layer.parentID=d.layers[d.active].isGroup ? d.layers[d.active].id : d.layers[d.active].parentID;
+            layer.name=kind; layer.origin=box.topLeft(); layer.size=box.size();
             layer.shape=Arc::shapeStyle(kind,color);
             if(kind=="Line") {
                 layer.shape["lineWidth"]=4;
@@ -333,7 +381,7 @@ Window::Window() {
     connect(canvas, &Canvas::guideMoved, this, [this](int index,double position) {
         edit("Move guide",[=](auto &d) { d.guides[index].position=position; });
     });
-    connect(canvas, &Canvas::moved, this, [this](int index, QPointF point) { edit("Move layer", [=](auto &d) { d.layers[index].origin = point; }); });
+    connect(canvas, &Canvas::moved, this, [this](int index, QPointF point) { edit("Move layer", [=](auto &d) { auto changed=d.layers[index]; changed.origin=point; Arc::transformGroup(d,index,changed); }); });
     connect(canvas, &Canvas::painted, this, [this](int index, const QImage &image) {
         edit("Paint stroke", [&](auto &d) { d.layers[index].image = image; Arc::rasterize(d.layers[index]); });
     });
@@ -350,24 +398,35 @@ Window::Window() {
 }
 void Window::refresh() {
     refreshing = true;
-    layers->clear();
-    for (int i = document.layers.size()-1; i >= 0; --i) {
-        const auto &l = document.layers[i];
-        auto *item = new QListWidgetItem(l.name, layers);
-        item->setFlags(item->flags() | Qt::ItemIsEditable | Qt::ItemIsUserCheckable);
-        item->setCheckState(l.visible ? Qt::Checked : Qt::Unchecked);
-        item->setIcon(QPixmap::fromImage(l.image.scaled(48,48,Qt::KeepAspectRatio,Qt::SmoothTransformation)));
+    QSet<QUuid> collapsed, selected;
+    for(QTreeWidgetItemIterator it(layers); *it; ++it) {
+        auto id=(*it)->data(0,Qt::UserRole+1).toUuid();
+        if(!(*it)->isExpanded()) collapsed.insert(id);
+        if((*it)->isSelected()) selected.insert(id);
     }
-    layers->setCurrentRow(document.active < 0 ? -1 : document.layers.size()-1-document.active);
+    layers->clear();
+    QHash<QUuid,QTreeWidgetItem *> items;
+    for(int i:Arc::layerOrder(document,true)) {
+        const auto &l=document.layers[i];
+        auto *item=l.parentID.isNull() ? new QTreeWidgetItem(layers) : new QTreeWidgetItem(items[l.parentID]);
+        item->setText(0,l.name); item->setData(0,Qt::UserRole,i); item->setData(0,Qt::UserRole+1,l.id);
+        auto flags=item->flags()|Qt::ItemIsEditable|Qt::ItemIsUserCheckable;
+        if(!l.isGroup) flags &= ~Qt::ItemIsDropEnabled;
+        item->setFlags(flags); item->setCheckState(0,l.visible ? Qt::Checked : Qt::Unchecked);
+        item->setIcon(0,l.isGroup ? style()->standardIcon(QStyle::SP_DirIcon)
+            : QIcon(QPixmap::fromImage(l.image.scaled(48,48,Qt::KeepAspectRatio,Qt::SmoothTransformation))));
+        item->setExpanded(!collapsed.contains(l.id)); item->setSelected(selected.contains(l.id) || i==document.active); items[l.id]=item;
+        if(i==document.active) layers->setCurrentItem(item,0,QItemSelectionModel::NoUpdate);
+    }
     inspector->setEnabled(document.active >= 0);
     if (document.active >= 0) {
         const auto &l = document.layers[document.active];
         x->setValue(l.origin.x()); y->setValue(l.origin.y()); w->setValue(l.size.width()); h->setValue(l.size.height());
-        angle->setValue(l.rotation); opacity->setValue(l.opacity*100); blend->setCurrentText(l.blend);
+        angle->setValue(l.rotation); opacity->setValue(l.opacity*100); blend->setCurrentText(l.blend); blend->setEnabled(!l.isGroup);
     }
     const bool hasLayer = document.active >= 0;
     const bool hasMask = hasLayer && !document.layers[document.active].mask.isNull();
-    addMask->setEnabled(hasLayer && !hasMask && !document.layers[document.active].image.isNull());
+    addMask->setEnabled(hasLayer && !hasMask && (document.layers[document.active].isGroup || !document.layers[document.active].image.isNull()));
     removeMask->setEnabled(hasMask); maskEnabled->setEnabled(hasMask);
     maskEnabled->setChecked(hasMask && document.layers[document.active].maskEnabled);
     paintTarget->setEnabled(hasMask);
@@ -389,14 +448,15 @@ void Window::edit(const QString &name, const std::function<void(Arc::Document &)
     });
 }
 void Window::editLayer(const QString &name, const std::function<void(Arc::Layer &)> &operation) {
-    if (document.active >= 0) edit(name, [&](auto &d) { operation(d.layers[d.active]); });
+    if (document.active >= 0) edit(name, [&](auto &d) { auto changed=d.layers[d.active]; operation(changed); Arc::transformGroup(d,d.active,changed); });
 }
 void Window::importImages(const QStringList &paths) {
     if (paths.isEmpty()) return;
     edit("Import images", [&](auto &d) {
         qint64 pixels = 0; for (const auto &l : d.layers) pixels += qint64(l.image.width())*l.image.height();
         for (const auto &path : paths) {
-            Arc::Layer l; l.image = Arc::readImage(path);
+            Arc::Layer l; if(d.active>=0) l.parentID=d.layers[d.active].isGroup ? d.layers[d.active].id : d.layers[d.active].parentID;
+            l.image = Arc::readImage(path);
             pixels += qint64(l.image.width())*l.image.height();
             if (pixels > Arc::MaxPixels) throw std::runtime_error("Combined source images exceed 100 megapixels.");
             l.name = QFileInfo(path).completeBaseName(); l.size = l.image.size();

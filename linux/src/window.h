@@ -3,7 +3,7 @@
 #include <QMainWindow>
 #include <QUndoStack>
 #include <functional>
-class QListWidget;
+class LayerTree;
 class QDoubleSpinBox;
 class QComboBox;
 class QLabel;
@@ -22,7 +22,7 @@ private:
     QString projectPath;
     QUndoStack history;
     Canvas *canvas;
-    QListWidget *layers;
+    LayerTree *layers;
     QWidget *inspector;
     QDoubleSpinBox *x, *y, *w, *h, *angle, *opacity;
     QComboBox *blend, *paintTarget;

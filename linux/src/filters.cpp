@@ -126,7 +126,7 @@ QImage applyFilter(const QImage &image,const FilterSettings &f) {
 }
 QImage filterLayer(const Layer &layer,const FilterSettings &filter,const std::optional<QPainterPath> &selection,bool mask) {
     QImage original=mask ? layer.mask : layer.image;
-    if(mask && selection && original.size()==QSize(1,1) && !layer.image.isNull()) original=original.scaled(layer.image.size());
+    if(mask && selection && original.size()==QSize(1,1)) original=original.scaled(maskEditingSize(layer));
     auto changed=applyFilter(original,filter);
     if(!selection) return changed;
     if(selection->isEmpty()) return original;
