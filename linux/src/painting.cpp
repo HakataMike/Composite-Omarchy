@@ -4,7 +4,7 @@
 #include <stdexcept>
 
 namespace Arc {
-QImage paintStroke(const Layer &original, const QPainterPath &path, const Brush &brush, QRectF clip) {
+QImage paintStroke(const Layer &original, const QPainterPath &path, const Brush &brush, QRectF clip, const QPainterPath &selection) {
     if (original.image.isNull()) throw std::runtime_error("Add a paint layer before painting.");
     if (!std::isfinite(brush.diameter) || brush.diameter < 1 || brush.diameter > 2000
         || !std::isfinite(brush.hardness) || brush.hardness < 0 || brush.hardness > 1
@@ -12,19 +12,24 @@ QImage paintStroke(const Layer &original, const QPainterPath &path, const Brush 
         throw std::runtime_error("Invalid brush settings.");
     if (path.elementCount() == 0 || clip.isEmpty() || brush.opacity == 0) return original.image;
 
-    QImage coverage(original.image.size(), QImage::Format_ARGB32_Premultiplied);
+    QTransform sourceToDocument = original.transform();
+    sourceToDocument.scale(original.size.width()/original.image.width(), original.size.height()/original.image.height());
+    bool invertible = false;
+    const auto documentToSource = sourceToDocument.inverted(&invertible);
+    if (!invertible) throw std::runtime_error("Cannot paint on this layer transform.");
+    double radius = brush.diameter/2 + 2;
+    QRectF affected = path.boundingRect().adjusted(-radius,-radius,radius,radius).intersected(clip);
+    QRect sourceRect = documentToSource.mapRect(affected).intersected(QRectF(original.image.rect())).toAlignedRect().adjusted(-2,-2,2,2).intersected(original.image.rect());
+    if (affected.isEmpty() || sourceRect.isEmpty()) return original.image;
+    QImage coverage(sourceRect.size(), QImage::Format_ARGB32_Premultiplied);
     if (coverage.isNull()) throw std::runtime_error("Insufficient memory for brush stroke.");
     coverage.fill(Qt::transparent);
     {
         QPainter p(&coverage);
-        // Source pixel -> local layer bounds -> document, then invert for painting.
-        QTransform sourceToDocument = original.transform();
-        sourceToDocument.scale(original.size.width()/original.image.width(), original.size.height()/original.image.height());
-        bool invertible = false;
-        auto documentToSource = sourceToDocument.inverted(&invertible);
-        if (!invertible) throw std::runtime_error("Cannot paint on this layer transform.");
-        p.setTransform(documentToSource);
+        p.translate(-sourceRect.topLeft());
+        p.setTransform(documentToSource,true);
         p.setClipRect(clip);
+        if (!selection.isEmpty()) p.setClipPath(selection,Qt::IntersectClip);
         p.setRenderHint(QPainter::Antialiasing);
         // Nested strokes approximate a linear radial falloff without accumulating
         // opacity where a stroke crosses itself. Hard brushes need only one pass.
@@ -53,23 +58,23 @@ QImage paintStroke(const Layer &original, const QPainterPath &path, const Brush 
         QPainter p(&result);
         p.setOpacity(brush.opacity);
         if (brush.eraser) p.setCompositionMode(QPainter::CompositionMode_DestinationOut);
-        p.drawImage(QPoint(), coverage);
+        p.drawImage(sourceRect.topLeft(), coverage);
     }
     return result;
 }
-QImage paintMaskStroke(const Layer &original, const QPainterPath &path, const Brush &brush, QRectF clip) {
+QImage paintMaskStroke(const Layer &original, const QPainterPath &path, const Brush &brush, QRectF clip, const QPainterPath &selection) {
     if (original.mask.isNull()) throw std::runtime_error("Add a mask before painting mask coverage.");
     Layer target = original;
     // Expand compact uniform masks only when edited; preserve nonuniform resolution.
     QImage mask = original.mask;
     if (mask.size() == QSize(1,1) && !original.image.isNull())
         mask = mask.scaled(original.image.size());
-    target.image = mask.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    target.image = mask;
     if (target.image.isNull()) throw std::runtime_error("Insufficient memory for mask painting.");
     Brush settings = brush;
     int coverage = brush.eraser ? 255 : qGray(brush.color.rgb());
     settings.color = QColor(coverage, coverage, coverage); settings.eraser = false;
-    auto result = paintStroke(target, path, settings, clip).convertToFormat(QImage::Format_Grayscale8);
+    auto result = paintStroke(target, path, settings, clip, selection);
     if (result.isNull()) throw std::runtime_error("Insufficient memory for painted mask.");
     return result;
 }

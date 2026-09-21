@@ -7,13 +7,16 @@
 class Canvas : public QWidget {
     Q_OBJECT
 public:
-    enum class Tool { Move, Brush, Eraser, Rectangle };
+    enum class Tool { Move, Brush, Eraser, Rectangle, Ellipse, Lasso, Polygon, Wand };
     explicit Canvas(QWidget *parent = nullptr);
     void setTool(Tool tool);
     void setBrush(const Arc::Brush &brush);
     void setMaskTarget(bool enabled);
     void clearSelection();
-    std::optional<QRectF> selectionBounds() const { return selection; }
+    void setSelection(const QPainterPath &path);
+    std::optional<QPainterPath> selectedPath() const { return selection; }
+    void setWandTolerance(int value) { wandTolerance = value; }
+    std::optional<QRectF> selectionBounds() const { return selection ? std::optional<QRectF>(selection->boundingRect()) : std::nullopt; }
     void setDocument(const Arc::Document &document);
     void fit();
     void zoomBy(double factor);
@@ -29,6 +32,7 @@ signals:
 protected:
     void paintEvent(QPaintEvent *) override;
     void mousePressEvent(QMouseEvent *) override;
+    void mouseDoubleClickEvent(QMouseEvent *) override;
     void mouseMoveEvent(QMouseEvent *) override;
     void mouseReleaseEvent(QMouseEvent *) override;
     void wheelEvent(QWheelEvent *) override;
@@ -51,7 +55,10 @@ private:
     QPainterPath strokePath;
     bool painting = false, selecting = false;
     bool maskTarget = false;
-    std::optional<QRectF> selection, previousSelection;
+    std::optional<QPainterPath> selection, previousSelection;
+    QPainterPath selectionGesture;
+    int selectionOperation = 0, wandTolerance = 32;
+    void combineSelection(const QPainterPath &path);
     QPointF selectionStart;
     QPointF pointerPosition;
     QPointF documentPoint(QPointF point) const;

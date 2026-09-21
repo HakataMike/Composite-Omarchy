@@ -32,7 +32,8 @@ struct Document {
 QStringList blendModes();
 void validate(const Document &document);
 QImage readImage(const QString &path);
-void paint(QPainter &painter, const Document &document);
+void paint(QPainter &painter, const Document &document, QRect region = {});
+void repaintRegion(QImage &image, const Document &document, QRect region);
 QImage render(const Document &document, bool whiteBackground = false);
 Document loadProject(const QString &path);
 void saveProject(const Document &document, const QString &path);

@@ -6,3 +6,7 @@ SOURCES += src/main.cpp src/document.cpp src/canvas.cpp src/window.cpp
 HEADERS += src/document.h src/canvas.h src/window.h
 SOURCES += src/painting.cpp
 HEADERS += src/painting.h
+SOURCES += src/operations.cpp
+HEADERS += src/operations.h
+SOURCES += src/selection.cpp ../Compositor/Rendering/WandPixels.c
+HEADERS += src/selection.h

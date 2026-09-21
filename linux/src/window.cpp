@@ -1,4 +1,9 @@
 #include "window.h"
+#include "operations.h"
+#include "selection.h"
+#include <QApplication>
+#include <QClipboard>
+#include <QInputDialog>
 #include <QAction>
 #include <QActionGroup>
 #include <QColorDialog>
@@ -54,6 +59,37 @@ Window::Window() {
     auto *editMenu = menuBar()->addMenu("&Edit");
     auto *undo = history.createUndoAction(this, "Undo"); undo->setShortcut(QKeySequence::Undo); editMenu->addAction(undo);
     auto *redo = history.createRedoAction(this, "Redo"); redo->setShortcuts({QKeySequence("Ctrl+Shift+Z"), QKeySequence("Ctrl+Y")}); editMenu->addAction(redo);
+    auto *imageMenu = menuBar()->addMenu("&Image");
+    imageMenu->addAction("Canvas size…",this,[this] { resizeDialog(false); });
+    imageMenu->addAction("Image size…",this,[this] { resizeDialog(true); });
+    imageMenu->addAction("Crop to selection",this,[this] {
+        auto selection = canvas->selectionBounds();
+        if (selection) edit("Crop canvas",[&](auto &d) { Arc::crop(d,selection->toAlignedRect()); });
+        else statusBar()->showMessage("Make a rectangular selection to crop the canvas.",5000);
+    });
+    imageMenu->addAction("Flip canvas horizontally",this,[this] {
+        edit("Flip canvas horizontally",[](auto &d) { for (auto &l : d.layers) {
+            l.origin.setX(d.size.width()-l.origin.x()-l.size.width()); l.rotation=-l.rotation; l.flipX=!l.flipX;
+        }});
+    });
+    imageMenu->addAction("Flip canvas vertically",this,[this] {
+        edit("Flip canvas vertically",[](auto &d) { for (auto &l : d.layers) {
+            l.origin.setY(d.size.height()-l.origin.y()-l.size.height()); l.rotation=-l.rotation; l.flipY=!l.flipY;
+        }});
+    });
+    auto *layerMenu = menuBar()->addMenu("&Layer");
+    layerMenu->addAction("Merge down",QKeySequence("Ctrl+E"),this,[this] { edit("Merge down",Arc::mergeDown); });
+    auto *maskMenu = layerMenu->addMenu("Mask");
+    auto maskFill = [this](int value) {
+        editLayer("Fill layer mask",[=](auto &l) { if (!l.mask.isNull()) l.mask.fill(QColor(value,value,value)); });
+    };
+    maskMenu->addAction("Reveal all",this,[=] { maskFill(255); });
+    maskMenu->addAction("Hide all",this,[=] { maskFill(0); });
+    maskMenu->addAction("Invert",this,[this] { editLayer("Invert layer mask",[](auto &l) { l.mask.invertPixels(); }); });
+    maskMenu->addAction("Feather / blur…",this,[this] {
+        bool ok=false; int radius=QInputDialog::getInt(this,"Feather mask","Radius (source pixels)",5,0,250,1,&ok);
+        if (ok) editLayer("Feather layer mask",[=](auto &l) { l.mask=Arc::blurImage(l.mask,radius); });
+    });
     auto *view = menuBar()->addMenu("&View");
     auto *fit = view->addAction("Fit canvas", QKeySequence("Ctrl+0"), canvas, &Canvas::fit);
     view->addAction("Zoom in", QKeySequence::ZoomIn, this, [this] { canvas->zoomBy(1.25); });
@@ -62,6 +98,34 @@ Window::Window() {
     toolbar->addAction(import); toolbar->addSeparator(); toolbar->addAction(undo); toolbar->addAction(redo); toolbar->addSeparator(); toolbar->addAction(fit);
     auto *selectMenu = menuBar()->addMenu("&Select");
     selectMenu->addAction("Deselect", QKeySequence("Ctrl+D"), canvas, &Canvas::clearSelection);
+    selectMenu->addAction("Select all",QKeySequence::SelectAll,this,[this] {
+        QPainterPath path; path.addRect(QRectF(QPointF(),document.size)); canvas->setSelection(path);
+    });
+    selectMenu->addAction("Invert selection",QKeySequence("Ctrl+Shift+I"),this,[this] {
+        QPainterPath path; path.addRect(QRectF(QPointF(),document.size));
+        if(auto selected=canvas->selectedPath()) path=path.subtracted(*selected);
+        canvas->setSelection(path);
+    });
+    selectMenu->addAction("Select layer pixels",this,[this] {
+        if(document.active<0) return;
+        report([&] { const auto &l=document.layers[document.active]; if(l.image.isNull()) return;
+            QTransform map=l.transform(); map.scale(l.size.width()/l.image.width(),l.size.height()/l.image.height());
+            canvas->setSelection(map.map(Arc::alphaSelection(l.image)));
+        });
+    });
+    editMenu->addAction("Copy merged",QKeySequence("Ctrl+Shift+C"),this,[this] {
+        report([&] { auto image=Arc::render(document); if(auto selected=canvas->selectedPath()) {
+            QImage mask(image.size(),QImage::Format_ARGB32_Premultiplied); mask.fill(Qt::transparent);
+            { QPainter p(&mask); p.fillPath(*selected,Qt::white); }
+            { QPainter p(&image); p.setCompositionMode(QPainter::CompositionMode_DestinationIn); p.drawImage(QPoint(),mask); }
+            image=image.copy(selected->boundingRect().toAlignedRect().intersected(image.rect()));
+        } QApplication::clipboard()->setImage(image); });
+    });
+    editMenu->addAction("Paste image as layer",QKeySequence::Paste,this,[this] {
+        auto image=QApplication::clipboard()->image(); if(image.isNull()) return;
+        edit("Paste image",[&](auto &d) { Arc::Layer layer; layer.image=image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+            layer.name="Pasted image"; layer.size=image.size(); d.layers.append(layer); d.active=d.layers.size()-1; });
+    });
     addToolBarBreak();
     auto *tools = addToolBar("Painting"); tools->setMovable(false);
     auto *toolGroup = new QActionGroup(this);
@@ -77,6 +141,13 @@ Window::Window() {
     addTool("Brush (B)", "B", Canvas::Tool::Brush);
     addTool("Eraser (E)", "E", Canvas::Tool::Eraser);
     addTool("Select rectangle (M)", "M", Canvas::Tool::Rectangle);
+    addTool("Ellipse", "", Canvas::Tool::Ellipse);
+    addTool("Lasso (L)", "L", Canvas::Tool::Lasso);
+    addTool("Polygon", "", Canvas::Tool::Polygon);
+    addTool("Wand (W)", "W", Canvas::Tool::Wand);
+    auto *tolerance=new QSpinBox; tolerance->setRange(0,255); tolerance->setValue(32);
+    tolerance->setPrefix("Tolerance "); tolerance->setAccessibleName("Magic wand tolerance"); tools->addWidget(tolerance);
+    connect(tolerance,&QSpinBox::valueChanged,canvas,&Canvas::setWandTolerance);
     tools->addSeparator();
     auto *color = tools->addAction("Color…");
     color->setObjectName("brushColor");
@@ -307,6 +378,25 @@ void Window::newProject() {
         if (!mayDiscard()) return;
         document = next; projectPath.clear(); sizeFirstImport = false; history.clear(); refresh(); canvas->fit();
     });
+}
+void Window::resizeDialog(bool resample) {
+    QDialog dialog(this); dialog.setWindowTitle(resample ? "Image size" : "Canvas size");
+    QFormLayout form(&dialog);
+    QSpinBox width,height; width.setRange(1,30000); height.setRange(1,30000);
+    width.setValue(document.size.width()); height.setValue(document.size.height());
+    QDoubleSpinBox resolution; resolution.setRange(1,9600); resolution.setValue(document.resolution);
+    QCheckBox centered("Keep canvas contents centered"); centered.setChecked(true);
+    form.addRow("Width (px)",&width); form.addRow("Height (px)",&height);
+    if (resample) form.addRow("Resolution (pixels/inch)",&resolution); else form.addRow(&centered);
+    QDialogButtonBox buttons(QDialogButtonBox::Ok|QDialogButtonBox::Cancel); form.addRow(&buttons);
+    connect(&buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
+    connect(&buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+    if (dialog.exec()!=QDialog::Accepted) return;
+    edit(resample ? "Resize image" : "Resize canvas",[&](auto &d) {
+        if (resample) { Arc::resizeImage(d,{width.value(),height.value()}); d.resolution=resolution.value(); }
+        else Arc::resizeCanvas(d,{width.value(),height.value()},centered.isChecked());
+    });
+    canvas->fit();
 }
 void Window::exportDialog() {
     auto path = QFileDialog::getSaveFileName(this, "Export image (JPEG uses a white background)", "Untitled.png", "PNG (*.png);;JPEG (*.jpg *.jpeg)");

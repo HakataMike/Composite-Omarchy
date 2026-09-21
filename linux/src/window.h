@@ -39,6 +39,7 @@ private:
     bool save(bool choosePath = false);
     bool mayDiscard();
     void newProject();
+    void resizeDialog(bool resample);
     void exportDialog();
     void chooseProject();
 };

@@ -1,4 +1,5 @@
 #include "canvas.h"
+#include "selection.h"
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QKeyEvent>
@@ -29,12 +30,26 @@ void Canvas::setTool(Tool value) {
 void Canvas::setBrush(const Arc::Brush &value) { cancelGesture(); brush = value; update(); }
 void Canvas::setMaskTarget(bool enabled) { cancelGesture(); maskTarget = enabled; }
 void Canvas::clearSelection() { cancelGesture(); selection.reset(); update(); }
+void Canvas::setSelection(const QPainterPath &path) { cancelGesture(); selection=path; update(); }
+void Canvas::combineSelection(const QPainterPath &path) {
+    QPainterPath canvasBounds; canvasBounds.addRect(QRectF(QPointF(),document.size));
+    auto combined=path;
+    if(previousSelection && selectionOperation==1) combined=previousSelection->united(path);
+    if(previousSelection && selectionOperation==2) combined=previousSelection->subtracted(path);
+    selection=combined.intersected(canvasBounds); update();
+}
 void Canvas::updateSelection(QPointF point) {
-    const QRectF bounds(QPointF(), document.size);
-    // Snap to pixel edges so selection boundaries have predictable coverage.
-    QPointF end(std::round(point.x()), std::round(point.y()));
-    selection = QRectF(selectionStart, end).normalized().intersected(bounds);
-    update();
+    QPainterPath shape;
+    if(tool==Tool::Lasso) {
+        selectionGesture.lineTo(point); shape=selectionGesture; shape.closeSubpath();
+    } else if(tool==Tool::Polygon) {
+        shape=selectionGesture; shape.lineTo(point); shape.closeSubpath();
+    } else {
+        QPointF end(std::round(point.x()),std::round(point.y()));
+        QRectF rectangle=QRectF(selectionStart,end).normalized();
+        if(tool==Tool::Ellipse) shape.addEllipse(rectangle); else shape.addRect(rectangle);
+    }
+    combineSelection(shape);
 }
 void Canvas::updateStroke(QPointF point) {
     try {
@@ -43,10 +58,16 @@ void Canvas::updateStroke(QPointF point) {
         Arc::Brush settings = brush;
         settings.eraser = tool == Tool::Eraser;
         QRectF clip(QPointF(), document.size);
-        if (selection) clip = clip.intersected(*selection);
-        if (maskTarget) document.layers[dragLayer].mask = Arc::paintMaskStroke(strokeOriginal, strokePath, settings, clip);
-        else document.layers[dragLayer].image = Arc::paintStroke(strokeOriginal, strokePath, settings, clip);
-        refreshImage();
+        if (selection) clip = clip.intersected(selection->boundingRect());
+        if (maskTarget) document.layers[dragLayer].mask = Arc::paintMaskStroke(strokeOriginal, strokePath, settings, clip, selection.value_or(QPainterPath()));
+        else document.layers[dragLayer].image = Arc::paintStroke(strokeOriginal, strokePath, settings, clip, selection.value_or(QPainterPath()));
+        double radius = settings.diameter/2 + 3;
+        QRect region = strokePath.boundingRect().adjusted(-radius,-radius,radius,radius).toAlignedRect()
+            .intersected(QRect(QPoint(),document.size));
+        if (!region.isEmpty()) {
+            Arc::repaintRegion(composite,document,region);
+        }
+        update();
     } catch (const std::exception &error) {
         cancelGesture();
         emit errorOccurred(QString::fromUtf8(error.what()));
@@ -93,9 +114,9 @@ void Canvas::paintEvent(QPaintEvent *) {
     }
     if (selection && !selection->isEmpty()) {
         QPen white(Qt::white, 1); white.setCosmetic(true);
-        p.setPen(white); p.setBrush(Qt::NoBrush); p.drawRect(*selection);
+        p.setPen(white); p.setBrush(Qt::NoBrush); p.drawPath(*selection);
         QPen black(Qt::black, 1, Qt::DashLine); black.setCosmetic(true);
-        p.setPen(black); p.drawRect(*selection);
+        p.setPen(black); p.drawPath(*selection);
     }
     if (underMouse() && !panning && (tool == Tool::Brush || tool == Tool::Eraser)) {
         QPointF center = documentPoint(pointerPosition);
@@ -112,12 +133,24 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
         panning = true; setCursor(Qt::ClosedHandCursor); return;
     }
     if (event->button() != Qt::LeftButton) return;
-    if (tool == Tool::Rectangle) {
+    if (tool == Tool::Wand) {
+        previousSelection=selection;
+        selectionOperation=(event->modifiers() & Qt::AltModifier) ? 2 : (event->modifiers() & Qt::ShiftModifier) ? 1 : 0;
+        try { combineSelection(Arc::wandSelection(composite,documentPoint(event->position()).toPoint(),wandTolerance,true)); }
+        catch(const std::exception &error) { emit errorOccurred(QString::fromUtf8(error.what())); }
+        previousSelection.reset(); return;
+    }
+    if (tool == Tool::Polygon && selecting) {
+        selectionGesture.lineTo(documentPoint(event->position())); updateSelection(documentPoint(event->position())); return;
+    }
+    if (tool == Tool::Rectangle || tool == Tool::Ellipse || tool == Tool::Lasso || tool == Tool::Polygon) {
         previousSelection = selection;
+        selectionOperation=(event->modifiers() & Qt::AltModifier) ? 2 : (event->modifiers() & Qt::ShiftModifier) ? 1 : 0;
         auto point = documentPoint(event->position());
         selectionStart = {std::clamp(std::round(point.x()), 0.0, double(document.size.width())),
                           std::clamp(std::round(point.y()), 0.0, double(document.size.height()))};
         selecting = true;
+        selectionGesture=QPainterPath(); selectionGesture.moveTo(point);
         updateSelection(point);
         return;
     }
@@ -150,6 +183,11 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
         dragLayer = hit; originalOrigin = document.layers[hit].origin; dragging = true;
     }
 }
+void Canvas::mouseDoubleClickEvent(QMouseEvent *event) {
+    if(tool==Tool::Polygon && selecting && event->button()==Qt::LeftButton) {
+        updateSelection(documentPoint(event->position())); selecting=false; previousSelection.reset(); update();
+    } else QWidget::mouseDoubleClickEvent(event);
+}
 void Canvas::mouseMoveEvent(QMouseEvent *event) {
     pointerPosition = event->position();
     update();
@@ -181,7 +219,7 @@ void Canvas::mouseReleaseEvent(QMouseEvent *event) {
         }
         return;
     }
-    if (selecting && event->button() == Qt::LeftButton) {
+    if (selecting && tool != Tool::Polygon && event->button() == Qt::LeftButton) {
         updateSelection(documentPoint(event->position()));
         selecting = false;
         if (selection->isEmpty()) selection.reset();
@@ -216,7 +254,10 @@ void Canvas::cancelGesture() {
     panning = false; unsetCursor();
 }
 void Canvas::keyPressEvent(QKeyEvent *event) {
-    if (event->key() == Qt::Key_Space) { space = true; setCursor(Qt::OpenHandCursor); event->accept(); }
+    if ((event->key()==Qt::Key_Return || event->key()==Qt::Key_Enter) && tool==Tool::Polygon && selecting) {
+        selectionGesture.closeSubpath(); combineSelection(selectionGesture); selecting=false; previousSelection.reset(); event->accept();
+    }
+    else if (event->key() == Qt::Key_Space) { space = true; setCursor(Qt::OpenHandCursor); event->accept(); }
     else if (event->key() == Qt::Key_Escape) { cancelGesture(); event->accept(); }
     else QWidget::keyPressEvent(event);
 }

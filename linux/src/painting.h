@@ -12,6 +12,6 @@ struct Brush {
 };
 // Path and clip are in document coordinates; pixels remain in layer coordinates.
 // Every preview starts from the original image so opacity applies once per stroke.
-QImage paintStroke(const Layer &original, const QPainterPath &path, const Brush &brush, QRectF clip);
-QImage paintMaskStroke(const Layer &original, const QPainterPath &path, const Brush &brush, QRectF clip);
+QImage paintStroke(const Layer &original, const QPainterPath &path, const Brush &brush, QRectF clip, const QPainterPath &selection = {});
+QImage paintMaskStroke(const Layer &original, const QPainterPath &path, const Brush &brush, QRectF clip, const QPainterPath &selection = {});
 }

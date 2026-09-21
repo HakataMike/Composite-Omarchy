@@ -1,4 +1,6 @@
 #include "../src/document.h"
+#include "../src/operations.h"
+#include "../src/selection.h"
 #include "../src/canvas.h"
 #include "../src/window.h"
 #include <QtTest>
@@ -314,6 +316,17 @@ private slots:
         QVERIFY(!enabled->isEnabled());
         undo->trigger(); QVERIFY(!window.isWindowModified());
     }
+    void regionalRenderingMatchesFullCanvas() {
+        auto d = sample(); d.size = {100,100};
+        auto &l = d.layers[0]; l.origin = {20,30}; l.size = {48,36}; l.rotation = 28; l.flipX = true;
+        l.mask = QImage(8,6,QImage::Format_Grayscale8);
+        for (int y=0;y<6;++y) for (int x=0;x<8;++x) l.mask.scanLine(y)[x] = x*30;
+        auto full = Arc::render(d);
+        QRect region(30,35,22,19); QImage partial(d.size,QImage::Format_ARGB32_Premultiplied);
+        partial.fill(Qt::transparent); Arc::repaintRegion(partial,d,region);
+        for (int y=0;y<region.height();++y) for (int x=0;x<region.width();++x)
+            QCOMPARE(partial.pixel(x+region.x(),y+region.y()),full.pixel(x+region.x(),y+region.y()));
+    }
     void paintingPerformanceSample() {
         Arc::Document d; d.size = {3840,2160};
         for (int i = 0; i < 4; ++i) {
@@ -330,6 +343,62 @@ private slots:
             QVERIFY(!Arc::render(preview).isNull());
         }
         qInfo("4K / four layers / soft mask stroke + full render: %.1f ms per preview (3 samples)", timer.nsecsElapsed()/3000000.0);
+        auto composite = Arc::render(d);
+        timer.restart();
+        for (int i=0; i<3; ++i) {
+            auto preview = d;
+            preview.layers[3].mask = Arc::paintMaskStroke(d.layers[3],path,brush,QRectF(QPointF(),d.size));
+            auto region = path.boundingRect().adjusted(-63,-63,63,63).toAlignedRect();
+            Arc::repaintRegion(composite,preview,region);
+            QVERIFY(!composite.isNull());
+        }
+        qInfo("4K / four layers / soft mask stroke + regional render: %.1f ms per preview (3 samples)", timer.nsecsElapsed()/3000000.0);
+    }
+    void cropResizeAndMerge() {
+        auto d = sample(); auto original = d.layers[0].image;
+        Arc::crop(d,QRect(1,2,20,16)); QCOMPARE(d.size,QSize(20,16)); QCOMPARE(d.layers[0].origin,QPointF(1,1));
+        QCOMPARE(d.layers[0].image,original);
+        Arc::resizeCanvas(d,{24,20},true); QCOMPARE(d.layers[0].origin,QPointF(3,3));
+        Arc::resizeImage(d,{48,40}); QCOMPARE(d.size,QSize(48,40)); QCOMPARE(d.layers[0].origin,QPointF(6,6));
+        QCOMPARE(d.layers[0].image.size(),QSize(32,24));
+        auto top=d.layers[0]; top.id=QUuid::createUuid(); top.image.fill(Qt::blue); top.origin += QPointF(3,4); top.opacity=0.5;
+        d.layers.append(top); d.active=1; auto before=Arc::render(d);
+        Arc::mergeDown(d); QCOMPARE(d.layers.size(),1); QCOMPARE(Arc::render(d),before);
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error,Arc::resizeCanvas(d,{30000,30000},true));
+    }
+    void maskFeatherPreservesCoverageAndSource() {
+        QImage mask(31,31,QImage::Format_Grayscale8); mask.fill(Qt::black);
+        for(int y=10;y<21;++y) for(int x=10;x<21;++x) mask.scanLine(y)[x]=255;
+        auto blurred=Arc::blurImage(mask,4);
+        QCOMPARE(blurred.format(),QImage::Format_Grayscale8);
+        QVERIFY(blurred.constScanLine(15)[9]>0); QVERIFY(blurred.constScanLine(15)[10]<255);
+        QCOMPARE(mask.constScanLine(15)[9],uchar(0)); QCOMPARE(mask.constScanLine(15)[10],uchar(255));
+    }
+    void wandAndVectorSelections() {
+        QImage image(20,20,QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
+        { QPainter p(&image); p.fillRect(QRect(2,2,5,5),Qt::black); p.fillRect(QRect(12,12,5,5),Qt::black); }
+        auto wand=Arc::wandSelection(image,{3,3},0,true);
+        QVERIFY(wand.contains(QPointF(4,4))); QVERIFY(!wand.contains(QPointF(13,13)));
+        auto global=Arc::wandSelection(image,{3,3},0,false); QVERIFY(global.contains(QPointF(13,13)));
+        Canvas canvas; canvas.resize(640,480); canvas.setDocument(sample()); canvas.show(); canvas.fit();
+        QVERIFY(QTest::qWaitForWindowExposed(&canvas));
+        auto point=[&](QPointF p) { return canvas.canvasToWidget(p).toPoint(); };
+        canvas.setTool(Canvas::Tool::Ellipse);
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,point({2,2}));
+        QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,point({12,12}));
+        QVERIFY(canvas.selectedPath()->contains(QPointF(7,7))); QVERIFY(!canvas.selectedPath()->contains(QPointF(2.1,2.1)));
+        canvas.setTool(Canvas::Tool::Rectangle);
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::ShiftModifier,point({15,2}));
+        QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::ShiftModifier,point({20,7}));
+        QVERIFY(canvas.selectedPath()->contains(QPointF(17,4))); QVERIFY(canvas.selectedPath()->contains(QPointF(7,7)));
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::AltModifier,point({5,5}));
+        QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::AltModifier,point({9,9}));
+        QVERIFY(!canvas.selectedPath()->contains(QPointF(7,7))); QVERIFY(canvas.selectedPath()->contains(QPointF(17,4)));
+        canvas.setTool(Canvas::Tool::Polygon);
+        QTest::mouseClick(&canvas,Qt::LeftButton,Qt::NoModifier,point({1,1}));
+        QTest::mouseClick(&canvas,Qt::LeftButton,Qt::NoModifier,point({10,1}));
+        QTest::mouseClick(&canvas,Qt::LeftButton,Qt::NoModifier,point({1,10})); QTest::keyClick(&canvas,Qt::Key_Return);
+        QVERIFY(canvas.selectedPath()->contains(QPointF(3,3))); QVERIFY(!canvas.selectedPath()->contains(QPointF(9,9)));
     }
     void windowUndoAndLayerControls() {
         QTemporaryDir temp; auto image = sample().layers[0].image; QVERIFY(image.save(temp.filePath("red.png")));

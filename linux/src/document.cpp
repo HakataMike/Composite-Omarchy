@@ -125,9 +125,10 @@ QImage readImage(const QString &path) {
     image.setColorSpace(QColorSpace::SRgb);
     return image;
 }
-void paint(QPainter &p, const Document &d) {
+void paint(QPainter &p, const Document &d, QRect region) {
+    if (region.isNull()) region = QRect(QPoint(), d.size);
     p.save();
-    p.setClipRect(QRect(QPoint(), d.size), Qt::IntersectClip);
+    p.setClipRect(region.intersected(QRect(QPoint(), d.size)), Qt::IntersectClip);
     for (const auto &l : d.layers) {
         if (!l.visible || l.image.isNull()) continue;
         p.save();
@@ -135,27 +136,74 @@ void paint(QPainter &p, const Document &d) {
         p.setOpacity(l.opacity);
         p.setCompositionMode(modes.at(blendModes().indexOf(l.blend)));
         p.setRenderHint(QPainter::SmoothPixmapTransform, l.sampling != "Nearest");
-        QImage pixels = l.image;
-        if (!l.mask.isNull() && l.maskEnabled) {
-            pixels = l.image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
-            require(!pixels.isNull(), "Insufficient memory for masked image.");
-            auto mask = l.mask.scaled(pixels.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-            require(!mask.isNull(), "Insufficient memory for mask rendering.");
-            // Multiply every premultiplied channel, including alpha, by coverage.
-            for (int y = 0; y < pixels.height(); ++y) {
-                auto *row = reinterpret_cast<QRgb *>(pixels.scanLine(y));
-                const auto *coverage = mask.constScanLine(y);
-                for (int x = 0; x < pixels.width(); ++x) {
-                    const unsigned c = coverage[x]; const QRgb v = row[x];
-                    row[x] = qRgba((qRed(v)*c+127)/255, (qGreen(v)*c+127)/255,
-                                   (qBlue(v)*c+127)/255, (qAlpha(v)*c+127)/255);
+        if (l.mask.isNull() || !l.maskEnabled) {
+            p.drawImage(QRectF(QPointF(), l.size), l.image);
+        } else {
+            QTransform sourceToDocument = l.transform();
+            sourceToDocument.scale(l.size.width()/l.image.width(), l.size.height()/l.image.height());
+            // Keep neighboring samples for pixel-aligned crops. Transformed layers
+            // retain the full source domain to match Qt's export interpolation.
+            const bool transformed = sourceToDocument.type() > QTransform::TxTranslate
+                || l.origin.x() != std::floor(l.origin.x()) || l.origin.y() != std::floor(l.origin.y());
+            QRect sourceRect = transformed ? l.image.rect() : sourceToDocument.inverted().mapRect(QRectF(region))
+                .intersected(QRectF(l.image.rect())).toAlignedRect().adjusted(-2,-2,2,2).intersected(l.image.rect());
+            if (!sourceRect.isEmpty()) {
+                QImage pixels = l.image.copy(sourceRect).convertToFormat(QImage::Format_ARGB32_Premultiplied);
+                require(!pixels.isNull(), "Insufficient memory for masked image.");
+                QImage scaledMask;
+                const bool uniform = l.mask.size() == QSize(1,1);
+                const bool sameSize = l.mask.size() == l.image.size();
+                if (!uniform && !sameSize) {
+                    scaledMask = QImage(sourceRect.size(), QImage::Format_RGB32);
+                    require(!scaledMask.isNull(), "Insufficient memory for mask rendering.");
+                    QPainter maskPainter(&scaledMask);
+                    maskPainter.translate(-sourceRect.topLeft());
+                    maskPainter.setRenderHint(QPainter::SmoothPixmapTransform);
+                    maskPainter.drawImage(QRect(QPoint(),l.image.size()),l.mask);
                 }
+                for (int y = 0; y < pixels.height(); ++y) {
+                    auto *row = reinterpret_cast<QRgb *>(pixels.scanLine(y));
+                    for (int x = 0; x < pixels.width(); ++x) {
+                        unsigned c = uniform ? l.mask.constScanLine(0)[0]
+                            : sameSize ? l.mask.constScanLine(y+sourceRect.y())[x+sourceRect.x()]
+                            : qRed(reinterpret_cast<const QRgb *>(scaledMask.constScanLine(y))[x]);
+                        const QRgb v = row[x];
+                        row[x] = qRgba((qRed(v)*c+127)/255,(qGreen(v)*c+127)/255,
+                                       (qBlue(v)*c+127)/255,(qAlpha(v)*c+127)/255);
+                    }
+                }
+                double sx = l.size.width()/l.image.width(), sy = l.size.height()/l.image.height();
+                p.scale(sx,sy);
+                p.drawImage(sourceRect.topLeft(),pixels);
             }
         }
-        p.drawImage(QRectF(QPointF(), l.size), pixels);
         p.restore();
     }
     p.restore();
+}
+void repaintRegion(QImage &image, const Document &d, QRect region) {
+    validate(d);
+    require(image.size() == d.size && image.format() == QImage::Format_ARGB32_Premultiplied,
+            "Invalid canvas preview cache.");
+    region = region.intersected(QRect(QPoint(),d.size));
+    if (region.isEmpty()) return;
+    for (const auto &layer : d.layers) {
+        if (!layer.visible || layer.image.isNull()) continue;
+        if (layer.rotation != 0 || layer.flipX || layer.flipY || layer.size != QSizeF(layer.image.size())
+            || layer.origin.x() != std::floor(layer.origin.x()) || layer.origin.y() != std::floor(layer.origin.y())) {
+            // Qt's clipped transformed sampling can differ by one channel level.
+            // Preserve exact preview/export agreement until a shared tile sampler exists.
+            image = render(d);
+            return;
+        }
+    }
+    // Keep the global raster origin: translating a rotated layer onto a temporary
+    // regional image can change Qt's fixed-point interpolation by one level.
+    QPainter painter(&image);
+    painter.setCompositionMode(QPainter::CompositionMode_Source);
+    painter.fillRect(region, Qt::transparent);
+    painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+    paint(painter,d,region);
 }
 QImage render(const Document &d, bool whiteBackground) {
     validate(d);
