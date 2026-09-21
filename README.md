@@ -1,4 +1,4 @@
-# Compositor ARC
+# Composite Omarchy
 
 A free, small file-size (<10MB) open-source image editor for Linux and Omarchy, built with C++ and Qt 6. Combine images, paint and retouch, add text and shapes, and adjust colors in a layered workspace.
 
@@ -12,7 +12,7 @@ A free, small file-size (<10MB) open-source image editor for Linux and Omarchy, 
 
 ## Download and run
 
-Extract the Linux archive from [Releases](https://github.com/HakataMike/Compositor_ARC/releases), then run `bin/compositor-arc`.
+Extract the Linux archive from [Releases](https://github.com/HakataMike/Composite-Omarchy/releases), then run `bin/compositor-arc`.
 
 On Arch/Omarchy, the runtime packages are `qt6-base`, `qt6-wayland`, `qt6-imageformats`, and `libheif`.
 
