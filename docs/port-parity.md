@@ -37,10 +37,10 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 - [ ] Gradient and editable shapes (linear gradient and editable shapes implemented; broader native acceptance remains)
 - [ ] Editable paragraph text with inline editing and font controls (dialog editing and font controls implemented; inline editing remains)
 - [ ] Clone stamp, healing, content-aware fill, blur tool (core tools implemented; healing mode controls and broader acceptance remain)
-- [ ] Levels/Auto, Curves, Hue/Saturation, Exposure, Gradient Map, Grain/Noise, Invert
-- [ ] Gaussian/motion blur with expanded bounds, lens correction
+- [x] Levels/Auto, graphical Curves, selective Hue/Saturation, Exposure, Gradient Map, Grain/Noise, Invert
+- [x] Gaussian/motion blur with expanded bounds, lens correction (CPU approximations documented)
 - [ ] Background removal with a Linux implementation
-- [ ] Live selection-limited previews
+- [x] Live selection-limited previews
 
 ## Final acceptance
 - [ ] Actual Wayland mouse/keyboard sessions for every tool and dialog dismissal

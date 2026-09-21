@@ -58,7 +58,7 @@ private:
     void filterDialog(const QString &kind);
     void shapeDialog();
     void effectsDialog();
-    void adjustmentDialog(QString kind = {});
+    void adjustmentDialog(QString kind = {}, bool destructive = false);
     void guidesDialog();
     void textDialog(QRectF bounds = {}, QColor color = Qt::black, bool editActive = false);
     void exportDialog();

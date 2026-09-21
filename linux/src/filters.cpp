@@ -1,6 +1,8 @@
 #include "filters.h"
 #include "masks.h"
 #include "operations.h"
+#include "adjustments.h"
+#include "spatial_filters.h"
 #include <QColorSpace>
 #include <algorithm>
 #include <cmath>
@@ -13,13 +15,14 @@ extern "C" {
 #include "../../Compositor/Rendering/ContentFill.h"
 }
 namespace Arc {
-QStringList filterNames() { return {"Levels","Curves","Hue/Saturation","Exposure","Gradient Map","Grain","Invert","Gaussian Blur","Noise","Lens Correction"}; }
+QStringList filterNames() { return {"Levels","Curves","Hue/Saturation","Exposure","Gradient Map","Grain","Invert","Gaussian Blur","Motion Blur","Noise","Lens Correction"}; }
 QVector<FilterParameter> filterParameters(const QString &kind) {
     if(kind=="Levels") return {{"black","Input black",0,254,0},{"gamma","Gamma",0.01,9.99,1},{"white","Input white",1,255,255},{"outputBlack","Output black",0,255,0},{"outputWhite","Output white",0,255,255}};
     if(kind=="Hue/Saturation") return {{"hue","Hue (degrees)",-180,180,0},{"saturation","Saturation (%)",-100,100,0},{"lightness","Lightness (%)",-100,100,0}};
     if(kind=="Exposure") return {{"exposure","Exposure (stops)",-20,20,0},{"offset","Offset",-0.5,0.5,0},{"gamma","Gamma",0.01,9.99,1}};
     if(kind=="Grain") return {{"amount","Amount",0,100,25},{"size","Size",0.5,20,1.5},{"roughness","Roughness",0,100,50}};
     if(kind=="Gaussian Blur") return {{"radius","Radius (source pixels)",0,250,5}};
+    if(kind=="Motion Blur") return {{"distance","Streak length (source pixels)",1,2000,20},{"angle","Angle (degrees)",-90,90,0}};
     if(kind=="Noise") return {{"amount","Amount (%)",0,100,10}};
     if(kind=="Lens Correction") return {{"distortion","Distortion",-1,1,0}};
     return {};
@@ -57,6 +60,10 @@ QImage applyFilter(const QImage &image,const FilterSettings &f) {
             throw std::runtime_error("Invalid filter parameter.");
     }
     auto value=[&](const char *key) { return f.values.value(key).toDouble(); };
+    if(f.kind=="Hue/Saturation") {
+        auto changed=adjustedImage(image,adjustmentFromFilter(f,{}));
+        return image.format()==QImage::Format_Grayscale8 ? changed.convertToFormat(image.format()) : changed;
+    }
     QImage result=image.convertToFormat(QImage::Format_RGBA8888_Premultiplied);
     if(result.isNull()) throw std::runtime_error("Insufficient memory for filter.");
     if(f.kind=="Levels" || f.kind=="Exposure" || f.kind=="Curves") {
@@ -102,6 +109,7 @@ QImage applyFilter(const QImage &image,const FilterSettings &f) {
         if(result.isNull()) throw std::runtime_error("Insufficient memory for lens correction.");
         lens_distort(source.constBits(),result.bits(),result.width(),result.height(),result.bytesPerLine(),value("distortion"));
     } else if(f.kind=="Gaussian Blur") result=blurImage(result,qRound(value("radius")));
+    else if(f.kind=="Motion Blur") result=motionBlur(result,value("distance"),value("angle"));
     else {
         auto straight=result.convertToFormat(QImage::Format_ARGB32);
         if(straight.isNull()) throw std::runtime_error("Insufficient memory for color adjustment.");
@@ -109,13 +117,7 @@ QImage applyFilter(const QImage &image,const FilterSettings &f) {
             auto *row=reinterpret_cast<QRgb *>(straight.scanLine(y));
             for(int x=0;x<straight.width();++x) {
                 auto color=QColor::fromRgba(row[x]); if(!color.alpha()) continue;
-                if(f.kind=="Invert") color=QColor(255-color.red(),255-color.green(),255-color.blue(),color.alpha());
-                else {
-                    float h,s,l,a; color.getHslF(&h,&s,&l,&a);
-                    h=std::fmod(std::max(0.0,double(h))+value("hue")/360+1,1.0);
-                    s=std::clamp(s+value("saturation")/100,0.0,1.0); l=std::clamp(l+value("lightness")/100,0.0,1.0);
-                    color=QColor::fromHslF(h,s,l,a);
-                }
+                color=QColor(255-color.red(),255-color.green(),255-color.blue(),color.alpha());
                 row[x]=color.rgba();
             }
         }
@@ -137,10 +139,12 @@ QImage filterLayer(const Layer &layer,const FilterSettings &filter,const std::op
     p.setTransform(QTransform()); p.setCompositionMode(QPainter::CompositionMode_Source); p.drawImage(QPoint(),changed);
     return result;
 }
-QPair<int,int> autoLevels(const QImage &image) {
+QPair<int,int> autoLevels(const QImage &image,int channel) {
+    if(channel<0 || channel>3) throw std::runtime_error("Invalid histogram channel.");
     auto rgba=image.convertToFormat(QImage::Format_RGBA8888_Premultiplied);
     if(rgba.isNull()) throw std::runtime_error("Select an image first.");
-    double bins[1024]={}; levels_histogram(rgba.constBits(),nullptr,size_t(rgba.width())*rgba.height(),bins);
+    double allBins[1024]={}; levels_histogram(rgba.constBits(),nullptr,size_t(rgba.width())*rgba.height(),allBins);
+    const auto *bins=allBins+256*channel;
     double total=0; for(int i=0;i<256;++i) total+=bins[i];
     if(total==0) return {0,255};
     double sum=0; int low=0,high=255;

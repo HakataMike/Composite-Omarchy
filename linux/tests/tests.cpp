@@ -1,6 +1,8 @@
 #include "../src/document.h"
 #include "../src/adjustments.h"
 #include "../src/effects.h"
+#include "../src/curve_editor.h"
+#include "../src/spatial_filters.h"
 #include <QDialogButtonBox>
 #include "../src/operations.h"
 #include "../src/selection.h"
@@ -48,6 +50,43 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void expandedBlursAndHueMath() {
+        auto d=sample(); auto source=d.layers[0]; auto gaussian=Arc::defaultFilter("Gaussian Blur"); gaussian.values["radius"]=3;
+        auto blurred=Arc::expandedBlur(source,gaussian); QVERIFY(blurred.image.width()>source.image.width());
+        QCOMPARE(blurred.origin.x()+blurred.size.width()/2,source.origin.x()+source.size.width()/2);
+        QVERIFY(blurred.image.pixelColor((blurred.image.width()-source.image.width())/2-1,blurred.image.height()/2).alpha()>0);
+        auto motion=Arc::defaultFilter("Motion Blur"); motion.values["distance"]=11; motion.values["angle"]=0;
+        auto streak=Arc::expandedBlur(source,motion); QVERIFY(streak.image.width()>source.image.width());
+        int pad=(streak.image.width()-source.image.width())/2;
+        QVERIFY(streak.image.pixelColor(pad-2,streak.image.height()/2).alpha()>0); QCOMPARE(streak.image.pixelColor(streak.image.width()/2,pad-2).alpha(),0);
+        motion.values["angle"]=90; streak=Arc::expandedBlur(source,motion); QVERIFY(streak.image.pixelColor(streak.image.width()/2,pad-2).alpha()>0);
+        source.mask=QImage(1,1,QImage::Format_Grayscale8); source.mask.fill(Qt::white); source.rotation=30;
+        blurred=Arc::expandedBlur(source,gaussian); QCOMPARE(Arc::maskTargetLayer(blurred).transform(),source.transform());
+        auto hue=Arc::defaultFilter("Hue/Saturation"); hue.values["saturation"]=100;
+        QImage neutral(1,1,QImage::Format_ARGB32_Premultiplied); neutral.fill(QColor(128,128,128)); QCOMPARE(Arc::applyFilter(neutral,hue),neutral);
+        hue.values["lightness"]=50; auto light=Arc::applyFilter(d.layers[0].image,hue).pixelColor(0,0); QCOMPARE(light.red(),255); QVERIFY(std::abs(light.green()-128)<=1);
+        gaussian.values["radius"]=0; QCOMPARE(Arc::expandedBlur(source,gaussian),source);
+    }
+    void curvesGraphAndDestructiveChannels() {
+        CurveEditor graph; graph.resize(300,250); graph.show(); QSignalSpy changes(&graph,&CurveEditor::pointsChanged);
+        QTest::mousePress(&graph,Qt::LeftButton,Qt::NoModifier,{150,125}); QTest::mouseRelease(&graph,Qt::LeftButton,Qt::NoModifier,{150,60});
+        QCOMPARE(graph.points().size(),3); QVERIFY(graph.points()[1].y()>190); QVERIFY(changes.count()>0);
+        QTest::mouseClick(&graph,Qt::RightButton,Qt::NoModifier,{150,60}); QCOMPARE(graph.points().size(),2);
+        auto d=sample(); d.layers[0].image.fill(QColor(100,50,20)); QTemporaryDir temp; auto file=temp.filePath("channels.comp"); Arc::saveProject(d,file);
+        Window window; window.show(); window.openProject(file); QAction *levels=nullptr,*save=nullptr;
+        for(auto *a:window.findChildren<QAction *>()) { if(a->text()=="Levels…" && !levels) levels=a; if(a->text()=="&Save project") save=a; }
+        QVERIFY(levels && save);
+        QTimer::singleShot(50,[&] {
+            auto *dialog=qobject_cast<QDialog *>(QApplication::activeModalWidget()); QVERIFY(dialog);
+            auto *channel=dialog->findChild<QComboBox *>("adjustmentChannel"); QVERIFY(channel);
+            channel->setCurrentIndex(1); dialog->findChild<QDoubleSpinBox *>("outputWhite")->setValue(0);
+            channel->setCurrentIndex(3); dialog->findChild<QDoubleSpinBox *>("outputBlack")->setValue(255);
+            dialog->accept();
+        });
+        levels->trigger(); save->trigger(); auto changed=Arc::loadProject(file); QCOMPARE(changed.layers.size(),1);
+        QCOMPARE(changed.layers[0].image.pixelColor(0,0),QColor(0,50,255)); QVERIFY(changed.layers[0].adjustment.isEmpty());
+        QCOMPARE(Arc::autoLevels(d.layers[0].image,1).first,100); QCOMPARE(Arc::autoLevels(d.layers[0].image,2).first,50);
+    }
     void selectionCoverageFeatherAndTransformedEdits() {
         auto d=sample(); QImage coverage(d.size,QImage::Format_Grayscale8); coverage.fill(QColor(128,128,128));
         auto changed=d.layers[0].image; changed.fill(Qt::blue);

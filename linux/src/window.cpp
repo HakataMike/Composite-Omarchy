@@ -3,6 +3,7 @@
 #include "operations.h"
 #include "selection.h"
 #include "filters.h"
+#include "spatial_filters.h"
 #include "styles.h"
 #include "hierarchy.h"
 #include "clipping.h"
@@ -597,6 +598,7 @@ void Window::resizeDialog(bool resample) {
     canvas->fit();
 }
 void Window::filterDialog(const QString &kind) {
+    if(Arc::adjustmentKinds().contains(kind)) { adjustmentDialog(kind,true); return; }
     if(document.active<0) { statusBar()->showMessage("Select an image layer first.",5000); return; }
     const int index=document.active; const bool mask=paintTarget->currentIndex()==1;
     const auto original=document;
@@ -641,7 +643,8 @@ void Window::filterDialog(const QString &kind) {
     QCheckBox preview("Live preview"); preview.setChecked(true); form.addRow(&preview);
     QLabel error; error.setWordWrap(true); form.addRow(&error);
     QDialogButtonBox buttons(QDialogButtonBox::Ok|QDialogButtonBox::Cancel); form.addRow(&buttons);
-    QImage result; bool valid=false;
+    QImage result; Arc::Layer expanded; bool valid=false;
+    const bool spreads=!mask && !selection && (kind=="Gaussian Blur" || kind=="Motion Blur");
     auto update=[&] {
         try {
             for(auto i=fields.begin();i!=fields.end();++i) settings.values[i.key()]=i.value()->value();
@@ -656,10 +659,11 @@ void Window::filterDialog(const QString &kind) {
                     settings.curve.append({x,y});
                 }
             }
-            result=Arc::filterLayer(original.layers[index],settings,selectionCoverage.isNull() ? selection : std::nullopt,mask);
+            if(spreads) { expanded=Arc::expandedBlur(original.layers[index],settings); result=expanded.image; }
+            else result=Arc::filterLayer(original.layers[index],settings,selectionCoverage.isNull() ? selection : std::nullopt,mask);
             if(!selectionCoverage.isNull()) result=Arc::limitToSelection(source,result,mask ? Arc::maskTargetLayer(original.layers[index]) : original.layers[index],selectionCoverage);
             auto shown=original;
-            if(preview.isChecked()) { if(mask) shown.layers[index].mask=result; else shown.layers[index].image=result; }
+            if(preview.isChecked()) { if(spreads) shown.layers[index]=expanded; else if(mask) shown.layers[index].mask=result; else shown.layers[index].image=result; }
             canvas->setDocument(shown); error.clear(); valid=true;
         } catch(const std::exception &e) { error.setText(QString::fromUtf8(e.what())); valid=false; canvas->setDocument(original); }
         buttons.button(QDialogButtonBox::Ok)->setEnabled(valid);
@@ -675,7 +679,7 @@ void Window::filterDialog(const QString &kind) {
     timer.start(0); int accepted=dialog.exec(); timer.stop();
     if(accepted==QDialog::Accepted) update();
     canvas->setDocument(original);
-    if(accepted==QDialog::Accepted && valid) edit(kind,[&](auto &d) { if(mask) d.layers[index].mask=result; else { d.layers[index].image=result; Arc::rasterize(d.layers[index]); } });
+    if(accepted==QDialog::Accepted && valid) edit(kind,[&](auto &d) { if(spreads) d.layers[index]=expanded; else if(mask) d.layers[index].mask=result; else { d.layers[index].image=result; Arc::rasterize(d.layers[index]); } });
 }
 void Window::exportDialog() {
     auto path = QFileDialog::getSaveFileName(this, "Export image (JPEG uses a white background)", "Untitled.png", "PNG (*.png);;JPEG (*.jpg *.jpeg)");

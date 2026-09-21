@@ -34,3 +34,7 @@ SOURCES += src/effects.cpp
 HEADERS += src/effects.h
 SOURCES += src/workspace.cpp
 HEADERS += src/workspace.h
+SOURCES += src/curve_editor.cpp
+HEADERS += src/curve_editor.h
+SOURCES += src/spatial_filters.cpp
+HEADERS += src/spatial_filters.h

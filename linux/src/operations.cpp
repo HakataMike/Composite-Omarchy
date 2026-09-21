@@ -130,10 +130,13 @@ QImage blurImage(const QImage &image, int radius) {
     if (scratch.isNull() || current.isNull()) throw std::runtime_error("Insufficient memory for blur.");
     // Three separable box passes approximate a Gaussian; running sums keep work
     // independent of radius. Premultiplied channels prevent transparent fringes.
+    double ideal=std::sqrt(4.0*radius*radius+1);
+    int low=int(std::floor(ideal)); if(low%2==0) --low;
+    int lowPasses=qRound((12.0*radius*radius-3*low*low-12*low-9)/(-4.0*low-4));
     for (int pass=0;pass<3;++pass) for (int axis=0;axis<2;++axis) {
         int length = axis ? current.height() : current.width();
         int lines = axis ? current.width() : current.height();
-        int r = std::max(1,int(std::round(radius*0.58)));
+        int r = (pass<lowPasses ? low : low+2)/2;
         for (int line=0;line<lines;++line) {
             auto get = [&](int position) {
                 position = std::clamp(position,0,length-1);

@@ -19,6 +19,6 @@ QVector<FilterParameter> filterParameters(const QString &kind);
 FilterSettings defaultFilter(const QString &kind);
 QImage applyFilter(const QImage &image,const FilterSettings &filter);
 QImage filterLayer(const Layer &layer,const FilterSettings &filter,const std::optional<QPainterPath> &selection,bool mask);
-QPair<int,int> autoLevels(const QImage &image);
+QPair<int,int> autoLevels(const QImage &image, int channel = 0);
 QImage contentAwareFill(const Layer &layer,const QPainterPath &selection);
 }
