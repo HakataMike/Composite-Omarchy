@@ -13,7 +13,6 @@
 #include <QStyle>
 #include <QJsonArray>
 #include <QTimer>
-#include <QPlainTextEdit>
 #include <QApplication>
 #include <QClipboard>
 #include <QInputDialog>
@@ -159,6 +158,8 @@ Window::Window() {
     connect(lockGuides,&QAction::toggled,canvas,&Canvas::setGuidesLocked);
     auto *snap=view->addAction("Snap to guides, canvas and layers"); snap->setCheckable(true);
     connect(snap,&QAction::toggled,canvas,&Canvas::setSnapping);
+    auto *rulers=view->addAction("Show rulers"); rulers->setCheckable(true); connect(rulers,&QAction::toggled,canvas,&Canvas::setRulersVisible);
+    auto *grid=view->addAction("Show pixel grid"); grid->setCheckable(true); connect(grid,&QAction::toggled,canvas,&Canvas::setPixelGridVisible);
     view->addSeparator();
     auto *fit = view->addAction("Fit canvas", QKeySequence("Ctrl+0"), canvas, &Canvas::fit);
     view->addAction("Zoom in", QKeySequence::ZoomIn, this, [this] { canvas->zoomBy(1.25); });
@@ -248,6 +249,7 @@ Window::Window() {
     addTool("Ellipse shape", "", Canvas::Tool::ShapeEllipse);
     addTool("Line shape", "", Canvas::Tool::ShapeLine);
     addTool("Text (T)", "T", Canvas::Tool::Text);
+    addTool("Crop (C)", "C", Canvas::Tool::Crop);
     auto *optionsMenu = new QMenu(this);
     auto *aligned = optionsMenu->addAction("Aligned clone source");
     aligned->setCheckable(true); aligned->setChecked(true);
@@ -466,6 +468,8 @@ Window::Window() {
         if(!extend || index<0) { QSignalBlocker block(layers); layers->clearSelection(); }
         document.active=index; refresh();
     });
+    connect(canvas,&Canvas::guideAdded,this,[this](Arc::Guide guide) { edit("Add guide",[&](auto &d) { d.guides.append(guide); }); });
+    connect(canvas,&Canvas::cropRequested,this,[this](QRect bounds) { edit("Crop canvas",[&](auto &d) { Arc::crop(d,bounds); }); });
     connect(canvas, &Canvas::guideMoved, this, [this](int index,double position) {
         edit("Move guide",[=](auto &d) { d.guides[index].position=position; });
     });
@@ -666,15 +670,6 @@ void Window::filterDialog(const QString &kind) {
         field->setDecimals(3); field->setValue(parameter.initial); field->setKeyboardTracking(false);
         fields[parameter.key]=field; form.addRow(parameter.label,field);
     }
-    QComboBox *channel=nullptr;
-    if(kind=="Levels" || kind=="Curves") {
-        channel=new QComboBox; channel->addItems({"RGB","Red","Green","Blue"}); form.addRow("Channel",channel);
-    }
-    QPlainTextEdit *curve=nullptr;
-    if(kind=="Curves") {
-        curve=new QPlainTextEdit("0, 0\n128, 128\n255, 255");
-        form.addRow("Curve points (input, output)",curve);
-    }
     QCheckBox *gaussian=nullptr,*monochromatic=nullptr;
     if(kind=="Noise") {
         gaussian=new QCheckBox("Gaussian distribution"); monochromatic=new QCheckBox("Monochromatic");
@@ -682,16 +677,6 @@ void Window::filterDialog(const QString &kind) {
     }
     QTimer timer; timer.setSingleShot(true); timer.setInterval(100);
     auto schedule=[&] { timer.start(); };
-    if(kind=="Gradient Map") {
-        auto *dark=new QPushButton("Choose shadow color"),*light=new QPushButton("Choose highlight color");
-        form.addRow(dark,light);
-        connect(dark,&QPushButton::clicked,&dialog,[&] { auto c=QColorDialog::getColor(settings.shadows,&dialog); if(c.isValid()) { settings.shadows=c; schedule(); } });
-        connect(light,&QPushButton::clicked,&dialog,[&] { auto c=QColorDialog::getColor(settings.highlights,&dialog); if(c.isValid()) { settings.highlights=c; schedule(); } });
-    }
-    if(kind=="Levels") {
-        auto *automatic=new QPushButton("Auto levels"); form.addRow(automatic);
-        connect(automatic,&QPushButton::clicked,&dialog,[&] { report([&] { auto range=Arc::autoLevels(source); fields["black"]->setValue(range.first); fields["white"]->setValue(range.second); }); });
-    }
     QCheckBox preview("Live preview"); preview.setChecked(true); form.addRow(&preview);
     QLabel error; error.setWordWrap(true); form.addRow(&error);
     QDialogButtonBox buttons(QDialogButtonBox::Ok|QDialogButtonBox::Cancel); form.addRow(&buttons);
@@ -700,17 +685,7 @@ void Window::filterDialog(const QString &kind) {
     auto update=[&] {
         try {
             for(auto i=fields.begin();i!=fields.end();++i) settings.values[i.key()]=i.value()->value();
-            if(channel) settings.channel=channel->currentIndex();
             if(gaussian) { settings.values["gaussian"]=gaussian->isChecked(); settings.values["monochromatic"]=monochromatic->isChecked(); }
-            if(curve) {
-                settings.curve.clear();
-                for(auto line:curve->toPlainText().split('\n',Qt::SkipEmptyParts)) {
-                    auto values=line.split(','); bool xok=false,yok=false;
-                    double x=values.value(0).trimmed().toDouble(&xok),y=values.value(1).trimmed().toDouble(&yok);
-                    if(values.size()!=2 || !xok || !yok) throw std::runtime_error("Enter one input, output pair per line.");
-                    settings.curve.append({x,y});
-                }
-            }
             if(spreads) { expanded=Arc::expandedBlur(original.layers[index],settings); result=expanded.image; }
             else result=Arc::filterLayer(original.layers[index],settings,selectionCoverage.isNull() ? selection : std::nullopt,mask);
             if(!selectionCoverage.isNull()) result=Arc::limitToSelection(source,result,mask ? Arc::maskTargetLayer(original.layers[index]) : original.layers[index],selectionCoverage);
@@ -722,8 +697,6 @@ void Window::filterDialog(const QString &kind) {
     };
     connect(&timer,&QTimer::timeout,&dialog,update);
     for(auto *field:fields) connect(field,&QDoubleSpinBox::valueChanged,&dialog,schedule);
-    if(channel) connect(channel,&QComboBox::currentIndexChanged,&dialog,schedule);
-    if(curve) connect(curve,&QPlainTextEdit::textChanged,&dialog,schedule);
     if(gaussian) { connect(gaussian,&QCheckBox::toggled,&dialog,schedule); connect(monochromatic,&QCheckBox::toggled,&dialog,schedule); }
     connect(&preview,&QCheckBox::toggled,&dialog,schedule);
     connect(&buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
@@ -732,10 +705,6 @@ void Window::filterDialog(const QString &kind) {
     if(accepted==QDialog::Accepted) update();
     canvas->setDocument(original);
     if(accepted==QDialog::Accepted && valid) edit(kind,[&](auto &d) { if(spreads) d.layers[index]=expanded; else if(mask) d.layers[index].mask=result; else { d.layers[index].image=result; Arc::rasterize(d.layers[index]); } });
-}
-void Window::exportDialog() {
-    auto path = QFileDialog::getSaveFileName(this, "Export image (JPEG uses a white background)", "Untitled.png", "PNG (*.png);;JPEG (*.jpg *.jpeg)");
-    if (!path.isEmpty()) report([&] { Arc::exportImage(document, path); statusBar()->showMessage("Exported " + path, 5000); });
 }
 void Window::closeEvent(QCloseEvent *event) { if (mayDiscard()) event->accept(); else event->ignore(); }
 

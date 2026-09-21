@@ -480,12 +480,13 @@ void saveProject(const Document &d, const QString &path) {
     if (syscall(SYS_renameat2, AT_FDCWD, from.constData(), AT_FDCWD, to.constData(), flags) != 0)
         fail("Could not atomically save project: " + QString::fromLocal8Bit(std::strerror(errno)));
 }
-void exportImage(const Document &d, const QString &path) {
+void exportImage(const Document &d, const QString &path, int quality) {
+    require(quality>=1 && quality<=100,"JPEG quality must be between 1 and 100.");
     auto format = QFileInfo(path).suffix().toLower().toLatin1();
     require(format == "png" || format == "jpg" || format == "jpeg", "Export filename must end with .png, .jpg, or .jpeg.");
     QSaveFile file(path);
     require(file.open(QIODevice::WriteOnly), file.errorString());
-    QImageWriter writer(&file, format == "png" ? "png" : "jpeg"); writer.setQuality(95);
+    QImageWriter writer(&file, format == "png" ? "png" : "jpeg"); writer.setQuality(quality);
     require(writer.write(render(d, format != "png")), writer.errorString());
     require(file.commit(), file.errorString());
 }

@@ -28,8 +28,8 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 - [x] Move outlines/pixels, duplicate selected pixels, clipboard
 - [ ] Transform handles and multiple-layer transforms implemented; convex free distortion implemented, folded shapes remain
 - [x] Persistent guides, guide editing/locking/visibility, canvas flips
-- [ ] Snapping (layer movement implemented; resize/shape/selection snapping and rulers remain)
-- [x] Crop to selection bounds, canvas size, image size/resolution (interactive snapping crop remains)
+- [x] Snapping for movement, resize, shapes, selections, and crop; rulers and ruler guides
+- [x] Interactive/symmetric crop, crop to selection bounds, canvas size, image size/resolution
 
 ## Tools and filters
 - [x] Straight-line brush strokes
@@ -46,6 +46,6 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 - [ ] Actual Wayland mouse/keyboard sessions for every tool and dialog dismissal
 - [ ] Representative multilayer image editing, saving/reopening, and export comparisons
 - [ ] HEIC/TIFF plugin availability and format behavior
-- [ ] High-quality downsampling, pixel grid, export preview
+- [x] High-quality downsampling, pixel grid, export preview
 - [ ] No silent loss of unsupported document data
 - [ ] Review all remaining deviations before calling this a full port

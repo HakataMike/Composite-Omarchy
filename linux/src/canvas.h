@@ -9,7 +9,7 @@ class QPlainTextEdit;
 class Canvas : public QWidget {
     Q_OBJECT
 public:
-    enum class Tool { Move, Brush, Eraser, Rectangle, Ellipse, Lasso, Polygon, Wand, Eyedropper, Gradient, Clone, Heal, Blur, ShapeRectangle, ShapeEllipse, ShapeLine, Text };
+    enum class Tool { Move, Brush, Eraser, Rectangle, Ellipse, Lasso, Polygon, Wand, Eyedropper, Gradient, Clone, Heal, Blur, ShapeRectangle, ShapeEllipse, ShapeLine, Text, Crop };
     explicit Canvas(QWidget *parent = nullptr);
     void setTool(Tool tool);
     void beginTextEditing(int index);
@@ -20,6 +20,8 @@ public:
     void setGuidesVisible(bool enabled);
     void setGuidesLocked(bool enabled);
     void setSnapping(bool enabled);
+    void setRulersVisible(bool enabled) { rulersVisible=enabled; update(); }
+    void setPixelGridVisible(bool enabled) { pixelGridVisible=enabled; update(); }
     void clearSelection();
     void setSelection(const QPainterPath &path);
     void setSelectionCoverage(const QImage &coverage);
@@ -45,6 +47,8 @@ signals:
     void maskMoved(int index, QJsonObject placement);
     void selectionPixelsMoved(QImage coverage,QPointF offset,bool duplicate);
     void guideMoved(int index, double position);
+    void guideAdded(Arc::Guide guide);
+    void cropRequested(QRect bounds);
     void filesDropped(QStringList paths);
     void zoomChanged(double zoom);
     void painted(int index, QImage image);
@@ -73,7 +77,9 @@ private:
     int textIndex=-1;
     Arc::Document textOriginal;
     Arc::Document document;
-    QImage composite;
+    QImage composite,downsampled;
+    qint64 downsampledKey=0;
+    QPointF snapPoint(QPointF point) const;
     double zoom = 1;
     QPointF offset = {40, 40}, pressPoint, originalOrigin, originalOffset;
     QVector<QUuid> selectedIDs,transformIDs;
@@ -91,6 +97,7 @@ private:
     Arc::Document dragOriginal;
     int dragLayer = -1;
     bool guidesVisible = true, guidesLocked = false, snapping = false;
+    bool rulersVisible=false,pixelGridVisible=false,newGuide=false;
     int dragGuide = -1;
     double originalGuidePosition = 0;
     Tool tool = Tool::Move;

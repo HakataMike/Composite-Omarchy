@@ -5,6 +5,8 @@
 #include "../src/spatial_filters.h"
 #include "../src/geometry.h"
 #include <QDialogButtonBox>
+#include <QFileDialog>
+#include <QLineEdit>
 #include "../src/operations.h"
 #include "../src/selection.h"
 #include "../src/filters.h"
@@ -27,6 +29,7 @@
 #include "../src/clipping.h"
 #include "../src/masks.h"
 #include <QDoubleSpinBox>
+#include <QSpinBox>
 #include <QAction>
 #include <QMessageBox>
 #include <QColorSpace>
@@ -51,6 +54,41 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void exportPreviewSaveAndCancel() {
+        auto d=sample(); QTemporaryDir temp; auto project=temp.filePath("export.comp"); Arc::saveProject(d,project);
+        Window window; window.show(); window.openProject(project); QAction *exportAction=nullptr;
+        for(auto *action:window.findChildren<QAction *>()) if(action->text()=="&Export image…") exportAction=action;
+        QVERIFY(exportAction); QString path=temp.filePath("preview.jpg"); bool sawPreview=false,cancel=false;
+        QTimer timer; timer.setInterval(10);
+        connect(&timer,&QTimer::timeout,[&] {
+            auto *dialog=qobject_cast<QDialog *>(QApplication::activeModalWidget()); if(!dialog) return;
+            if(auto *files=qobject_cast<QFileDialog *>(dialog)) { files->selectNameFilter(cancel ? "PNG (*.png)" : "JPEG (*.jpg *.jpeg)"); files->setDirectory(QFileInfo(path).absolutePath());
+                auto *name=files->findChild<QLineEdit *>("fileNameEdit"); QVERIFY(name); name->setText(QFileInfo(path).fileName());
+                QMetaObject::invokeMethod(files,"accept",Qt::DirectConnection); }
+            else if(dialog->windowTitle()=="Export preview") {
+                sawPreview=true; auto *quality=dialog->findChild<QSpinBox *>("jpegQuality"); QVERIFY(quality); quality->setValue(30);
+                if(cancel) dialog->reject(); else dialog->accept();
+            }
+        });
+        timer.start(); exportAction->trigger(); timer.stop(); QVERIFY(sawPreview); QVERIFY2(QFileInfo::exists(path),qPrintable(QDir(temp.path()).entryList().join(", "))); QCOMPARE(Arc::readImage(path).size(),d.size); QVERIFY(!window.isWindowModified());
+        path=temp.filePath("canceled.png"); cancel=true; sawPreview=false;
+        timer.start(); exportAction->trigger(); timer.stop(); QVERIFY(sawPreview); QVERIFY(!QFileInfo::exists(path));
+    }
+    void rulersCropSnappingAndExportQuality() {
+        auto d=sample(); Canvas canvas; canvas.resize(640,480); canvas.show(); canvas.setDocument(d); canvas.fit(); canvas.setRulersVisible(true);
+        QSignalSpy guides(&canvas,&Canvas::guideAdded),crops(&canvas,&Canvas::cropRequested); auto point=[&](QPointF p) { return canvas.canvasToWidget(p).toPoint(); };
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,{100,8}); QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,point({10,7}));
+        QCOMPARE(guides.count(),1); auto guide=qvariant_cast<Arc::Guide>(guides[0][0]); QCOMPARE(guide.axis,QString("horizontal")); QVERIFY(std::abs(guide.position-7)<0.2);
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,{8,100}); QTest::keyClick(&canvas,Qt::Key_Escape); QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,point({5,5})); QCOMPARE(guides.count(),1);
+        canvas.setTool(Canvas::Tool::Crop); canvas.setSnapping(true);
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,point({8,8})); QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::AltModifier,point({12,12}));
+        QCOMPARE(crops.count(),1); auto crop=qvariant_cast<QRect>(crops[0][0]); QCOMPARE(crop,QRect(4,4,8,8));
+        canvas.setPixelGridVisible(true); QVERIFY(!canvas.grab().isNull()); canvas.zoomBy(0.03); QVERIFY(!canvas.grab().isNull());
+        Arc::Document noise; noise.size={128,128}; Arc::Layer layer; layer.size=noise.size; layer.image=QImage(noise.size,QImage::Format_ARGB32_Premultiplied);
+        for(int y=0;y<128;++y) for(int x=0;x<128;++x) layer.image.setPixelColor(x,y,QColor((x*73+y*11)%256,(x*7+y*91)%256,(x*41+y*33)%256));
+        noise.layers={layer}; noise.active=0; QTemporaryDir temp; auto low=temp.filePath("low.jpg"),high=temp.filePath("high.jpg");
+        Arc::exportImage(noise,low,15); Arc::exportImage(noise,high,95); QVERIFY(QFileInfo(low).size()<QFileInfo(high).size()); QCOMPARE(Arc::readImage(high).size(),noise.size);
+    }
     void radialTransparentGradientsAndHealingModes() {
         auto d=sample(); auto layer=d.layers[0]; layer.origin={0,0}; layer.image.fill(Qt::transparent);
         Arc::Brush brush; brush.color=Qt::red;

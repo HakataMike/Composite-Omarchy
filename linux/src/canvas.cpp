@@ -94,6 +94,7 @@ void Canvas::combineSelection(const QPainterPath &path) {
     update();
 }
 void Canvas::updateSelection(QPointF point) {
+    if(snapping) point=snapPoint(point);
     QPainterPath shape;
     if(tool==Tool::Lasso) {
         selectionGesture.lineTo(point); shape=selectionGesture; shape.closeSubpath();
@@ -172,7 +173,18 @@ void Canvas::paintEvent(QPaintEvent *) {
     { QPainter checker(&tile); checker.fillRect(0,0,12,12,QColor(240,240,240)); checker.fillRect(12,12,12,12,QColor(240,240,240)); }
     p.fillRect(bounds, QBrush(tile));
     p.setRenderHint(QPainter::SmoothPixmapTransform, zoom < 1);
-    p.drawImage(QPoint(), composite); p.restore();
+    if(zoom<0.5) {
+        QSize pixels(std::max(1,qRound(document.size.width()*zoom*devicePixelRatioF())),std::max(1,qRound(document.size.height()*zoom*devicePixelRatioF())));
+        if(downsampledKey!=composite.cacheKey() || downsampled.size()!=pixels) { downsampled=composite.scaled(pixels,Qt::IgnoreAspectRatio,Qt::SmoothTransformation); downsampledKey=composite.cacheKey(); }
+        p.drawImage(bounds,downsampled);
+    } else p.drawImage(QPoint(), composite);
+    if(pixelGridVisible && zoom>=8) {
+        QPen grid(QColor(128,128,128,100),1); grid.setCosmetic(true); p.setPen(grid);
+        auto visible=QRectF(documentPoint(QPointF()),documentPoint(QPointF(width(),height()))).intersected(bounds);
+        for(int x=std::max(0,int(std::floor(visible.left())));x<=std::min(document.size.width(),int(std::ceil(visible.right())));++x) p.drawLine(QPointF(x,visible.top()),QPointF(x,visible.bottom()));
+        for(int y=std::max(0,int(std::floor(visible.top())));y<=std::min(document.size.height(),int(std::ceil(visible.bottom())));++y) p.drawLine(QPointF(visible.left(),y),QPointF(visible.right(),y));
+    }
+    p.restore();
     QPen border(palette().color(QPalette::Mid)); border.setCosmetic(true); p.setPen(border); p.drawRect(bounds);
     if (document.active >= 0 && tool == Tool::Move) {
         auto box=activeTransformBox(); auto corners=distortActive && transformHandle>=0 ? transformQuad : Arc::layerCorners(box);
@@ -196,7 +208,7 @@ void Canvas::paintEvent(QPaintEvent *) {
     }
     if(drafting) {
         QPen pen(brush.color,tool==Tool::ShapeLine ? 4 : 1); pen.setCosmetic(tool!=Tool::ShapeLine);
-        p.setPen(pen); p.setBrush(tool==Tool::Text ? QBrush(Qt::NoBrush) : QBrush(brush.color));
+        p.setPen(pen); p.setBrush((tool==Tool::Text || tool==Tool::Crop) ? QBrush(Qt::NoBrush) : QBrush(brush.color));
         p.setRenderHint(QPainter::Antialiasing);
         auto box=QRectF(draftStart,draftEnd).normalized();
         if(tool==Tool::ShapeLine) p.drawLine(draftStart,draftEnd);
@@ -216,6 +228,20 @@ void Canvas::paintEvent(QPaintEvent *) {
         cross.setColor(Qt::black); cross.setWidth(1); p.setPen(cross);
         p.drawLine(point-QPointF(6/zoom,0),point+QPointF(6/zoom,0)); p.drawLine(point-QPointF(0,6/zoom),point+QPointF(0,6/zoom));
     }
+    if(rulersVisible) {
+        p.save(); p.resetTransform(); p.fillRect(0,0,width(),18,palette().window()); p.fillRect(0,0,18,height(),palette().window());
+        p.setPen(palette().windowText().color()); QFont font=p.font(); font.setPixelSize(9); p.setFont(font);
+        double step=std::pow(10,std::floor(std::log10(70/zoom))); if(step*zoom<35) step*=5; if(step*zoom<35) step*=2;
+        for(int axis=0;axis<2;++axis) {
+            double origin=axis ? offset.y() : offset.x(); int length=axis ? height() : width();
+            for(double value=std::ceil((18-origin)/zoom/step)*step;value*zoom+origin<length;value+=step) {
+                int pixel=qRound(value*zoom+origin);
+                if(axis) { p.drawLine(12,pixel,18,pixel); p.save(); p.translate(10,pixel+3); p.rotate(-90); p.drawText(0,0,QString::number(value)); p.restore(); }
+                else { p.drawLine(pixel,12,pixel,18); p.drawText(pixel+3,10,QString::number(value)); }
+            }
+        }
+        p.restore();
+    }
     if (underMouse() && !panning && (tool == Tool::Brush || tool == Tool::Eraser || tool == Tool::Clone || tool == Tool::Heal || tool == Tool::Blur)) {
         QPointF center = documentPoint(pointerPosition);
         QPen white(Qt::white, 2); white.setCosmetic(true);
@@ -231,6 +257,12 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
         panning = true; setCursor(Qt::ClosedHandCursor); return;
     }
     if (event->button() != Qt::LeftButton) return;
+    if(rulersVisible && !guidesLocked && (event->position().x()<18 || event->position().y()<18)) {
+        if(document.guides.size()>=1000) { emit errorOccurred("Maximum 1,000 guides reached."); return; }
+        Arc::Guide guide; guide.axis=event->position().y()<18 ? "horizontal" : "vertical";
+        auto point=documentPoint(event->position()); guide.position=guide.axis=="horizontal" ? point.y() : point.x();
+        document.guides.append(guide); dragGuide=document.guides.size()-1; originalGuidePosition=guide.position; newGuide=true; update(); return;
+    }
     if(tool==Tool::Move && document.active>=0) {
         auto box=activeTransformBox(); auto corners=Arc::layerCorners(box); auto point=documentPoint(event->position());
         int handle=-1;
@@ -261,8 +293,10 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
         }
         if(dragGuide>=0) { originalGuidePosition=document.guides[dragGuide].position; return; }
     }
-    if(tool==Tool::ShapeRectangle || tool==Tool::ShapeEllipse || tool==Tool::ShapeLine || tool==Tool::Text) {
+    if(tool==Tool::ShapeRectangle || tool==Tool::ShapeEllipse || tool==Tool::ShapeLine || tool==Tool::Text || tool==Tool::Crop) {
         drafting=true; draftAnchor=documentPoint(event->position());
+        if(snapping && !(event->modifiers() & Qt::AltModifier)) draftAnchor=snapPoint(draftAnchor);
+        if(tool==Tool::Crop) draftAnchor={std::round(draftAnchor.x()),std::round(draftAnchor.y())};
         updateDraft(draftAnchor,event->modifiers()); return;
     }
     if(tool==Tool::Eyedropper) {
@@ -402,6 +436,8 @@ void Canvas::mouseMoveEvent(QMouseEvent *event) {
     }
 }
 void Canvas::updateDraft(QPointF point, Qt::KeyboardModifiers modifiers) {
+    if(snapping && !(modifiers & Qt::AltModifier)) point=snapPoint(point);
+    if(tool==Tool::Crop) point={std::round(point.x()),std::round(point.y())};
     auto delta=point-draftAnchor;
     if(modifiers & Qt::ShiftModifier) {
         if(tool==Tool::ShapeLine) {
@@ -434,12 +470,16 @@ void Canvas::mouseReleaseEvent(QMouseEvent *event) {
         auto index=dragGuide; auto &g=document.guides[index]; auto point=documentPoint(event->position());
         double position=std::clamp(g.axis=="vertical" ? point.x() : point.y(),-1000000.0,1000000.0);
         g.position=position; dragGuide=-1; update();
-        if(position!=originalGuidePosition) emit guideMoved(index,position);
+        if(newGuide) { auto guide=document.guides.takeLast(); newGuide=false; emit guideAdded(guide); }
+        else if(position!=originalGuidePosition) emit guideMoved(index,position);
         return;
     }
     if(drafting && event->button()==Qt::LeftButton) {
         updateDraft(documentPoint(event->position()),event->modifiers()); drafting=false; update();
-        if(tool==Tool::Text) emit textRequested(QRectF(draftStart,draftEnd).normalized(),brush.color);
+        if(tool==Tool::Crop) {
+            auto bounds=QRectF(draftStart,draftEnd).normalized().toAlignedRect(); if(bounds.width()>0 && bounds.height()>0) emit cropRequested(bounds);
+        }
+        else if(tool==Tool::Text) emit textRequested(QRectF(draftStart,draftEnd).normalized(),brush.color);
         else if(QLineF(draftStart,draftEnd).length()>=1) emit shapeCreated(
             tool==Tool::ShapeLine ? "Line" : tool==Tool::ShapeEllipse ? "Ellipse" : "Rectangle",draftStart,draftEnd,brush.color);
         return;
@@ -494,7 +534,7 @@ void Canvas::cancelGesture() {
         selection=previousSelection; selectionMask=previousSelectionMask; document=dragOriginal;
         movingSelection=movingPixels=false; previousSelection.reset(); previousSelectionMask={}; refreshImage();
     }
-    if(dragGuide>=0) { document.guides[dragGuide].position=originalGuidePosition; dragGuide=-1; update(); }
+    if(dragGuide>=0) { if(newGuide) document.guides.removeLast(); else document.guides[dragGuide].position=originalGuidePosition; newGuide=false; dragGuide=-1; update(); }
     if(drafting) { drafting=false; update(); }
     if (painting) {
         document.layers[dragLayer] = strokeOriginal;
@@ -541,7 +581,9 @@ Arc::Layer Canvas::activeTransformBox() const {
 }
 void Canvas::updateTransform(QPointF point,Qt::KeyboardModifiers modifiers) {
     document=dragOriginal; auto changed=boxOriginal;
-    auto start=documentPoint(pressPoint),delta=point-start;
+    auto start=documentPoint(pressPoint);
+    if(snapping && !(modifiers & Qt::AltModifier) && transformHandle<8) point=snapPoint(point);
+    auto delta=point-start;
     if(modifiers & Qt::ShiftModifier && (distortActive || transformHandle==9)) {
         if(std::abs(delta.x())>std::abs(delta.y())) delta.setY(0); else delta.setX(0);
         point=start+delta;
@@ -639,4 +681,15 @@ bool Canvas::eventFilter(QObject *object,QEvent *event) {
         if(event->type()==QEvent::FocusOut) finishTextEditing();
     }
     return QWidget::eventFilter(object,event);
+}
+
+QPointF Canvas::snapPoint(QPointF point) const {
+    QVector<double> xs{0,double(document.size.width()),document.size.width()/2.0},ys{0,double(document.size.height()),document.size.height()/2.0};
+    for(int i:Arc::visibleLayerOrder(document)) {
+        const auto &layer=document.layers[i]; if(selectedIDs.contains(layer.id) && tool==Tool::Move) continue;
+        auto bounds=Arc::layerCorners(layer).boundingRect(); xs << bounds.left() << bounds.center().x() << bounds.right(); ys << bounds.top() << bounds.center().y() << bounds.bottom();
+    }
+    if(guidesVisible) for(const auto &guide:document.guides) { if(guide.axis=="vertical") xs.append(guide.position); else ys.append(guide.position); }
+    auto snap=[&](double value,const QVector<double> &targets) { double distance=6/zoom,result=value; for(double target:targets) if(std::abs(value-target)<distance) { distance=std::abs(value-target); result=target; } return result; };
+    return {snap(point.x(),xs),snap(point.y(),ys)};
 }
