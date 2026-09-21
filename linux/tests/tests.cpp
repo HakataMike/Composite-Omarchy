@@ -4,6 +4,7 @@
 #include "../src/filters.h"
 #include "../src/retouch.h"
 #include "../src/styles.h"
+#include "../src/blending.h"
 #include <QPlainTextEdit>
 #include "../src/canvas.h"
 #include "../src/window.h"
@@ -38,6 +39,48 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void nonseparableBlendReferenceColors() {
+        QImage backdrop(1,1,QImage::Format_ARGB32_Premultiplied),source(1,1,QImage::Format_ARGB32_Premultiplied);
+        source.fill(QColor(32,128,192));
+        const QStringList modes{"Hue","Saturation","Color","Luminosity"};
+        const QList<QColor> expected{QColor(35,93,131),QColor(160,54,0),QColor(5,101,165),QColor(155,91,59)};
+        for(int i=0;i<modes.size();++i) {
+            backdrop.fill(QColor(128,64,32));
+            Arc::blendNonseparable(backdrop,source,modes[i]); QCOMPARE(backdrop.pixelColor(0,0),expected[i]);
+            backdrop.fill(Qt::transparent);
+            Arc::blendNonseparable(backdrop,source,modes[i]); QCOMPARE(backdrop,source);
+            QImage clear=source; clear.fill(Qt::transparent);
+            Arc::blendNonseparable(backdrop,clear,modes[i]); QCOMPARE(backdrop,source);
+        }
+        backdrop.fill(QColor(128,128,128));
+        Arc::blendNonseparable(backdrop,source,"Saturation"); QCOMPARE(backdrop.pixelColor(0,0),QColor(128,128,128));
+        // Source-over alpha: red at alpha 128 over red at alpha 128.
+        source.fill(QColor(255,0,0,128)); backdrop=source;
+        Arc::blendNonseparable(backdrop,source,"Color");
+        QCOMPARE(backdrop.pixelColor(0,0),QColor(255,0,0,192));
+        // Extreme luminosities exercise gamut clipping without division by zero.
+        for(const auto &mode:modes) for(const auto &color:{QColor(Qt::white),QColor(Qt::black)}) {
+            backdrop.fill(color); source.fill(Qt::red); Arc::blendNonseparable(backdrop,source,mode);
+            auto p=backdrop.pixel(0,0); QVERIFY(qRed(p)<=qAlpha(p)); QVERIFY(qGreen(p)<=qAlpha(p)); QVERIFY(qBlue(p)<=qAlpha(p));
+        }
+    }
+    void nonseparableBlendRenderingAndPersistence() {
+        auto d=sample(); d.layers[0].image.fill(QColor(128,64,32));
+        auto top=d.layers[0]; top.id=QUuid::createUuid(); top.image.fill(QColor(32,128,192)); top.blend="Color";
+        d.layers.append(top); d.active=1;
+        auto full=Arc::render(d); QCOMPARE(full.pixelColor(5,5),QColor(5,101,165));
+        top.opacity=0.5; d.layers[1]=top;
+        auto half=Arc::render(d).pixelColor(5,5);
+        QVERIFY(std::abs(half.red()-67)<=1); QVERIFY(std::abs(half.green()-83)<=1); QVERIFY(std::abs(half.blue()-99)<=1);
+        d.layers[1].mask=QImage(1,1,QImage::Format_Grayscale8); d.layers[1].mask.fill(Qt::black);
+        QCOMPARE(Arc::render(d).pixelColor(5,5),QColor(128,64,32));
+        d.layers[1].mask.fill(Qt::white); d.layers[1].rotation=17;
+        auto cache=Arc::render(d); d.layers[1].image.fill(Qt::green);
+        Arc::repaintRegion(cache,d,{3,3,6,6}); QCOMPARE(cache,Arc::render(d));
+        QTemporaryDir temp; auto path=temp.filePath("blend.comp"); Arc::saveProject(d,path);
+        auto loaded=Arc::loadProject(path); QCOMPARE(loaded.layers[1].blend,QString("Color")); QCOMPARE(Arc::render(loaded),cache);
+        Arc::exportImage(d,temp.filePath("blend.png")); QCOMPARE(QImage(temp.filePath("blend.png")).convertToFormat(cache.format()),cache);
+    }
     void guidesPersistTransformAndStayOutOfExports() {
         auto d=sample(); d.size={1000,1000};
         Arc::Guide vertical; vertical.position=60;
@@ -626,7 +669,12 @@ private slots:
     void filterPreviewCancelAndUndo() {
         QTemporaryDir temp; QVERIFY(sample().layers[0].image.save(temp.filePath("red.png")));
         Window window; window.show(); QVERIFY(QTest::qWaitForWindowExposed(&window)); window.importImages({temp.filePath("red.png")});
-        auto *canvas=window.findChild<Canvas *>(); auto point=canvas->canvasToWidget({8,6}).toPoint();
+        auto *canvas=window.findChild<Canvas *>();
+        auto sampledColor=[&] {
+            auto image=canvas->grab().toImage();
+            auto point=canvas->canvasToWidget({8,6})*image.devicePixelRatio();
+            return image.pixelColor(point.toPoint());
+        };
         QAction *invert=nullptr,*undo=nullptr;
         for(auto *action:window.findChildren<QAction *>()) {
             if(action->text()=="Invert…") invert=action;
@@ -635,12 +683,12 @@ private slots:
         QVERIFY(invert); QVERIFY(undo); bool sawPreview=false;
         QTimer::singleShot(150,[&] {
             auto *dialog=qobject_cast<QDialog *>(QApplication::activeModalWidget());
-            if(dialog) { sawPreview=canvas->grab().toImage().pixelColor(point)==QColor(Qt::cyan); dialog->reject(); }
+            if(dialog) { sawPreview=sampledColor()==QColor(Qt::cyan); dialog->reject(); }
         });
-        invert->trigger(); QVERIFY(sawPreview); QCOMPARE(canvas->grab().toImage().pixelColor(point),QColor(Qt::red));
+        invert->trigger(); QVERIFY(sawPreview); QCOMPARE(sampledColor(),QColor(Qt::red));
         QTimer::singleShot(150,[&] { if(auto *dialog=qobject_cast<QDialog *>(QApplication::activeModalWidget())) dialog->accept(); });
-        invert->trigger(); QCOMPARE(canvas->grab().toImage().pixelColor(point),QColor(Qt::cyan));
-        undo->trigger(); QCOMPARE(canvas->grab().toImage().pixelColor(point),QColor(Qt::red));
+        invert->trigger(); QCOMPARE(sampledColor(),QColor(Qt::cyan));
+        undo->trigger(); QCOMPARE(sampledColor(),QColor(Qt::red));
         undo->trigger(); QVERIFY(!window.isWindowModified());
     }
     void windowUndoAndLayerControls() {

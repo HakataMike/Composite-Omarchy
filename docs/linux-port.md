@@ -43,7 +43,7 @@ Qt selects its platform from the desktop environment. If needed, force native Wa
 - Select All, Invert Selection, Select Layer Pixels (nonzero alpha outline), Copy Merged, and Paste Image as Layer.
 - Drag a layer to move it. Shift constrains movement to one axis. Escape cancels the drag.
 - Numeric position, width, height, rotation, opacity, and horizontal/vertical flips. Transforming preserves source image pixels.
-- Normal, Multiply, Screen, Overlay, Darken, Lighten, Difference, Color Dodge, Color Burn, and Soft Light blending.
+- Normal, Multiply, Screen, Overlay, Darken, Lighten, Difference, Color Dodge, Color Burn, Soft Light, Hue, Saturation, Color, and Luminosity blending.
 - Wheel zoom, middle-drag or Space-drag pan, and Fit Canvas (`Ctrl+0`).
 - Undo/redo (`Ctrl+Z`, `Ctrl+Shift+Z` or `Ctrl+Y`), with up to 100 edits. Source images are implicitly shared across history snapshots.
 - Project saving (`Ctrl+S`), Save As, and unsaved-change prompts before closing or replacing a document.
@@ -98,3 +98,5 @@ Editable text: click with Text (T) for point text, or drag a paragraph box. Clic
 Shapes and text survive save/reopen with the native metadata schema. Painting and image filters rasterize them; masks and ordinary transforms retain metadata. Undo restores editability. Image → Image size currently bakes all layers into rasters, including shapes/text. Loading v8 does not imply support for all v8 features: unknown data is still rejected.
 
 Guides and snapping: View → Manage guides creates horizontal/vertical guides at exact pixel positions, edits them, or removes them. The dialog previews changes; Cancel restores the original and Apply is one undo step. Move (V) drags an unlocked guide; Escape cancels. View also toggles guide visibility, locking, and snapping to guides/canvas/layer edges and centers. Snapping is initially off, uses a six-screen-pixel tolerance, and Alt temporarily bypasses it. Shift-constrained movement stays on its chosen axis. Hidden guides do not attract snapping. Guides are saved in the native v8 schema, follow crop/resize/flip operations, and never render into exported pixels. Ruler-based guide creation and snapping for resize/shape/selection gestures remain to be ported.
+
+All 14 blend modes from the macOS app are now selectable and saved with the project. Hue/Saturation/Color/Luminosity use the [W3C nonseparable blend equations](https://www.w3.org/TR/compositing-1/#blendingnonseparable), with straight sRGB for the blend and premultiplied source-over composition for transparency. Layer opacity and masks are applied before blending. These four modes currently require an extra full-canvas surface and a CPU pixel pass; painting in documents using them falls back to full redraw. Reference-color and transparency tests cover the implementation, but pixel-for-pixel comparisons against Core Graphics remain part of final macOS fixture acceptance.

@@ -1,5 +1,7 @@
 #include "document.h"
 #include "styles.h"
+#include "blending.h"
+#include <algorithm>
 #include <QColorSpace>
 #include <QDir>
 #include <QFileInfo>
@@ -59,6 +61,9 @@ QUuid uuid(const QJsonValue &value) {
     require(value.isString() && !QUuid(value.toString()).isNull(), "Invalid project UUID.");
     return QUuid(value.toString());
 }
+bool hasNonseparableBlend(const Document &d) {
+    return std::any_of(d.layers.begin(),d.layers.end(),[](const auto &l) { return l.visible && !l.image.isNull() && isNonseparableBlend(l.blend); });
+}
 QString idString(QUuid id) { return id.toString(QUuid::WithoutBraces).toUpper(); }
 void safeFile(const QString &path, const QString &root, qint64 limit) {
     QFileInfo info(path);
@@ -67,7 +72,7 @@ void safeFile(const QString &path, const QString &root, qint64 limit) {
 }
 }
 QStringList blendModes() {
-    return {"Normal", "Multiply", "Screen", "Overlay", "Darken", "Lighten", "Difference", "Color Dodge", "Color Burn", "Soft Light"};
+    return {"Normal", "Multiply", "Screen", "Overlay", "Darken", "Lighten", "Difference", "Color Dodge", "Color Burn", "Soft Light", "Hue", "Saturation", "Color", "Luminosity"};
 }
 bool Layer::operator==(const Layer &o) const {
     return id == o.id && name == o.name && image == o.image && origin == o.origin && size == o.size
@@ -139,6 +144,9 @@ void paint(QPainter &p, const Document &d, QRect region) {
     if (region.isNull()) region = QRect(QPoint(), d.size);
     p.save();
     p.setClipRect(region.intersected(QRect(QPoint(), d.size)), Qt::IntersectClip);
+    if(hasNonseparableBlend(d)) {
+        p.drawImage(QPoint(),render(d)); p.restore(); return;
+    }
     for (const auto &l : d.layers) {
         if (!l.visible || l.image.isNull()) continue;
         p.save();
@@ -197,6 +205,7 @@ void repaintRegion(QImage &image, const Document &d, QRect region) {
             "Invalid canvas preview cache.");
     region = region.intersected(QRect(QPoint(),d.size));
     if (region.isEmpty()) return;
+    if(hasNonseparableBlend(d)) { image=render(d); return; }
     for (const auto &layer : d.layers) {
         if (!layer.visible || layer.image.isNull()) continue;
         if (layer.rotation != 0 || layer.flipX || layer.flipY || layer.size != QSizeF(layer.image.size())
@@ -220,7 +229,20 @@ QImage render(const Document &d, bool whiteBackground) {
     QImage result(d.size, QImage::Format_ARGB32_Premultiplied);
     require(!result.isNull(), "Insufficient memory to render canvas.");
     result.fill(Qt::transparent);
-    { QPainter p(&result); paint(p, d); }
+    if(hasNonseparableBlend(d)) {
+        // Only modes absent from QPainter need an intermediate source surface.
+        // Keep ordinary layers on the existing painter path for identical sampling.
+        Document single=d; single.layers.clear(); single.active=0;
+        for(const auto &layer:d.layers) {
+            if(!layer.visible || layer.image.isNull()) continue;
+            single.layers={layer};
+            if(isNonseparableBlend(layer.blend)) {
+                single.layers[0].blend="Normal";
+                auto source=render(single);
+                blendNonseparable(result,source,layer.blend);
+            } else { QPainter p(&result); paint(p,single); }
+        }
+    } else { QPainter p(&result); paint(p, d); }
     if (whiteBackground) {
         QPainter p(&result);
         p.setCompositionMode(QPainter::CompositionMode_DestinationOver);

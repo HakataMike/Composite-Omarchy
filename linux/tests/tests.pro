@@ -18,3 +18,5 @@ HEADERS += ../src/retouch.h
 SOURCES += ../src/styles.cpp
 HEADERS += ../src/styles.h
 SOURCES += ../src/style_dialogs.cpp
+SOURCES += ../src/blending.cpp
+HEADERS += ../src/blending.h
