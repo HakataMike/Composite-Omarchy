@@ -1,5 +1,19 @@
 # Compositor
 
+## Compositor ARC — Linux / Omarchy port
+
+This fork includes an early **C++ / Qt 6** desktop editor alongside the original macOS app. It supports image import, flat raster layers, transforms, undo/redo, project saving, and PNG/JPEG export. Advanced macOS features are still being ported.
+
+```sh
+./scripts/linux-build.sh
+./scripts/linux-run.sh
+./scripts/linux-test.sh
+```
+
+See [Linux build instructions, supported features, and project compatibility](docs/linux-port.md). The requirements and Xcode instructions below describe the original macOS application.
+
+---
+
 Adobe Photoshop costs too much and tools like GIMP don’t feel familiar enough for me to stay in flow. That’s why I built Compositor.
 
 The goal was to create a full-featured image editor that is completely free and open source. I use Photoshop for compositing and post-processing, so Compositor is built around that workflow - with the tools needed to create a pixel-perfect final image.
