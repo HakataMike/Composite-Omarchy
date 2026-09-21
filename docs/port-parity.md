@@ -30,8 +30,8 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 ## Tools and filters
 - [x] Straight-line brush strokes
 - [x] Eyedropper
-- [ ] Gradient and editable shapes (linear gradient implemented)
-- [ ] Editable paragraph text with inline editing and font controls
+- [ ] Gradient and editable shapes (linear gradient and editable shapes implemented; broader native acceptance remains)
+- [ ] Editable paragraph text with inline editing and font controls (dialog editing and font controls implemented; inline editing remains)
 - [ ] Clone stamp, healing, content-aware fill, blur tool (core tools implemented; healing mode controls and broader acceptance remain)
 - [ ] Levels/Auto, Curves, Hue/Saturation, Exposure, Gradient Map, Grain/Noise, Invert
 - [ ] Gaussian/motion blur with expanded bounds, lens correction

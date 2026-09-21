@@ -1,4 +1,5 @@
 #include "document.h"
+#include "styles.h"
 #include <QColorSpace>
 #include <QDir>
 #include <QFileInfo>
@@ -71,7 +72,7 @@ QStringList blendModes() {
 bool Layer::operator==(const Layer &o) const {
     return id == o.id && name == o.name && image == o.image && origin == o.origin && size == o.size
         && rotation == o.rotation && flipX == o.flipX && flipY == o.flipY && visible == o.visible
-        && mask == o.mask && maskEnabled == o.maskEnabled
+        && shape == o.shape && text == o.text && mask == o.mask && maskEnabled == o.maskEnabled
         && opacity == o.opacity && blend == o.blend && sampling == o.sampling;
 }
 bool Document::operator==(const Document &o) const {
@@ -92,6 +93,7 @@ void validate(const Document &d) {
     QSet<QUuid> ids;
     qint64 pixels = 0, maskPixels = 0;
     for (const auto &l : d.layers) {
+        validateStyles(l);
         require(!l.id.isNull() && !ids.contains(l.id), "Duplicate or invalid layer ID."); ids.insert(l.id);
         require(std::isfinite(l.origin.x()) && std::isfinite(l.origin.y()) && std::abs(l.origin.x()) <= 1000000
             && std::abs(l.origin.y()) <= 1000000 && std::isfinite(l.rotation)
@@ -233,7 +235,7 @@ Document loadProject(const QString &path) {
     auto m = json.object();
     require(m["format"] == "com.compositor.project", "Not a Compositor project.");
     int version = integer(m["version"]);
-    require(version >= 1 && version <= 4, "This Linux preview supports flat raster projects v1–4. Newer projects require features not yet ported.");
+    require(version >= 1 && version <= 8, "Unsupported project version (expected v1–8).");
     keys(m, {"format", "version", "colorSpace", "resolution", "documentID", "width", "height", "activeLayerID", "layers"});
     require(m["colorSpace"] == "sRGB" && m["layers"].isArray(), "Invalid project metadata.");
     Document d;
@@ -246,7 +248,7 @@ Document loadProject(const QString &path) {
     for (const auto value : m["layers"].toArray()) {
         require(value.isObject(), "Invalid layer record.");
         const auto r = value.toObject();
-        keys(r, {"id", "name", "isVisible", "transform", "imageFile", "opacity", "blendMode", "parentID", "isGroup", "maskFile", "maskEnabled"});
+        keys(r, {"id", "name", "isVisible", "transform", "imageFile", "opacity", "blendMode", "parentID", "isGroup", "maskFile", "maskEnabled", "shape", "text"});
         require((!r.contains("parentID") || r["parentID"].isNull())
             && (!r.contains("isGroup") || (r["isGroup"].isBool() && !r["isGroup"].toBool())), "Groups are not supported in this preview.");
         Layer l;
@@ -266,6 +268,12 @@ Document loadProject(const QString &path) {
         if (r.contains("imageFile") && !r["imageFile"].isNull()) {
             asset = r["imageFile"].toString();
             require(asset == r["id"].toString() + ".png", "Unsafe image filename.");
+        }
+        for (const auto &field : {QString("shape"), QString("text")}) {
+            if(r.contains(field) && !r[field].isNull()) {
+                require(r[field].isObject() && !r[field].toObject().isEmpty() && !asset.isEmpty(), "Invalid editable layer metadata.");
+                if(field=="shape") l.shape=r[field].toObject(); else l.text=r[field].toObject();
+            }
         }
         QString maskFile;
         if (r.contains("maskFile")) {
@@ -315,6 +323,7 @@ Document loadProject(const QString &path) {
 }
 void saveProject(const Document &d, const QString &path) {
     validate(d);
+    for(const auto &layer : d.layers) require((layer.shape.isEmpty() && layer.text.isEmpty()) || !layer.image.isNull(), "Editable layers require a cached image.");
     QFileInfo destination(QDir::cleanPath(QFileInfo(path).absoluteFilePath()));
     require(destination.fileName().endsWith(".comp", Qt::CaseInsensitive) && !destination.isSymLink(), "Project name must end with .comp and cannot be a symbolic link.");
     // Only replace projects we can fully understand, never an arbitrary directory.
@@ -351,8 +360,10 @@ void saveProject(const Document &d, const QString &path) {
         if (!l.mask.isNull()) {
             QString name = idString(l.id) + ".mask.png";
             require(l.mask.save(staging.path() + "/images/" + name, "PNG"), "Could not write layer mask.");
-            r["maskFile"] = name; r["maskEnabled"] = l.maskEnabled; version = 4;
+            r["maskFile"] = name; r["maskEnabled"] = l.maskEnabled; version = std::max(version,4);
         }
+        if(!l.shape.isEmpty()) { r["shape"]=l.shape; version=8; }
+        if(!l.text.isEmpty()) { r["text"]=l.text; version=8; }
         layers.append(r);
     }
     QJsonObject manifest{{"format", "com.compositor.project"}, {"version", version}, {"colorSpace", "sRGB"},

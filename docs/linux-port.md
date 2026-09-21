@@ -53,9 +53,9 @@ Use File → Open Project to select the `.comp` directory itself. Linux displays
 
 ## Project compatibility and safety
 
-The current Swift implementation writes **version 8**, while the older `project-format.md` overview covers versions 1–6. The Qt loader currently accepts **versions 1–4 with flat raster layers and linked raster masks**. It writes version 4 when masks are present, otherwise version 3 using the existing manifest and embedded PNG structure, including original source pixels and separate transforms.
+The current Swift implementation writes **version 8**, while the older `project-format.md` overview covers versions 1–6. The Qt loader accepts **versions 1–8 containing supported flat layers**, including linked raster masks and editable shape/text metadata. It writes version 8 for editable shapes/text, version 4 for masks, and version 3 otherwise, using the existing manifest and embedded PNG structure.
 
-Groups, clipping masks, unlinked masks, effects, editable text, shape metadata, adjustment layers, unknown fields, and later format versions are rejected. Unsupported blend modes are rejected too. This prevents silent loss of features on save. Compatibility has been tested against hand-authored legacy-schema fixtures and Qt round trips; an actual macOS-to-Linux round trip has not yet been verified.
+Groups, clipping masks, unlinked masks, effects, adjustment layers, guides, unknown fields, and future format versions are rejected. Unsupported blend modes are rejected too. This prevents silent loss of features on save. Compatibility has been tested against hand-authored legacy-schema fixtures and Qt round trips; an actual macOS-to-Linux round trip has not yet been verified.
 
 Saves stage a complete sibling directory, then use Linux `renameat2` to atomically install or exchange it. A failure leaves the previous project in place. Filesystems without the required rename operation report an error rather than falling back to a destructive overwrite. This guarantees atomic replacement, not power-loss durability. Existing destinations must be supported projects and must not contain unrelated files or extra image assets.
 
@@ -90,3 +90,9 @@ Adjustment limitations: Hue/Saturation currently affects the full color range; s
 Retouching tools are available from the tool dropdown: Eyedropper (I), Gradient (G), Clone Stamp (S), Healing (J), and Blur Brush. Alt-click selects a clone source. Options controls aligned cloning, sampling all visible layers, and the gradient end color (white by default). Gradient, blur, brush, and eraser support masks. Shift-click with the brush or eraser connects to the previous stroke endpoint. Retouching previews cancel with Escape and commit as a single undo step.
 
 Healing currently uses Content-Aware mode; Create Texture and Proximity Match remain to be exposed. Clone/heal currently target image pixels, not masks. Clone sources are captured at stroke start to avoid recursive smearing. The gradient is linear; radial and transparent-stop variants remain. Blur uses the same bounded three-box approximation as the filter.
+
+Editable shapes: drag Rectangle (U), Ellipse, or Line from the tool menu. Shift constrains squares/circles or 45-degree lines; Alt grows from the center. Layer → Edit shape changes fill, corner radius, and line width. Resizing a shape in the inspector redraws its geometry at the new size.
+
+Editable text: click with Text (T) for point text, or drag a paragraph box. Clicking existing text reopens its editor; Layer → Edit text also works. The preview dialog controls content, font, pixel size, alignment, tracking in pixels, leading, color, and paragraph dimensions. Escape/Cancel restores the original; Apply records one edit. Text uses Qt layout, so font metrics can differ from AppKit. Cached PNGs are retained on load until editing, including when the original font is unavailable. Inline canvas text editing remains to be ported.
+
+Shapes and text survive save/reopen with the native metadata schema. Painting and image filters rasterize them; masks and ordinary transforms retain metadata. Undo restores editability. Image → Image size currently bakes all layers into rasters, including shapes/text. Loading v8 does not imply support for all v8 features: unknown data is still rejected.

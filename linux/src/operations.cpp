@@ -1,4 +1,5 @@
 #include "operations.h"
+#include "styles.h"
 #include <QColorSpace>
 #include <cmath>
 #include <algorithm>
@@ -51,6 +52,7 @@ void resizeImage(Document &d, QSize size) {
         pixels += qint64(bounds.width())*bounds.height();
         if (pixels > MaxPixels) throw std::runtime_error("Resized layers exceed 100 megapixels.");
         if (!l.image.isNull()) l.image = transformedImage(l.image,l.size,mapping,bounds,false);
+        rasterize(l);
         if (!l.mask.isNull()) l.mask = transformedImage(l.mask,l.size,mapping,bounds,true);
         l.origin = bounds.topLeft(); l.size = bounds.size(); l.rotation = 0; l.flipX = l.flipY = false;
     }

@@ -14,3 +14,7 @@ SOURCES += ../src/filters.cpp ../../Compositor/Rendering/AdjustPixels.c ../../Co
 HEADERS += ../src/filters.h
 SOURCES += ../src/retouch.cpp ../../Compositor/Rendering/HealPixels.c
 HEADERS += ../src/retouch.h
+
+SOURCES += ../src/styles.cpp
+HEADERS += ../src/styles.h
+SOURCES += ../src/style_dialogs.cpp

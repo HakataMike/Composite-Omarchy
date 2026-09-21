@@ -2,6 +2,8 @@
 #include "operations.h"
 #include "selection.h"
 #include "filters.h"
+#include "styles.h"
+#include <QJsonArray>
 #include <QTimer>
 #include <QPlainTextEdit>
 #include <QApplication>
@@ -87,9 +89,11 @@ Window::Window() {
     filterMenu->addAction("Content-aware fill",this,[this] {
         auto selection=canvas->selectedPath();
         if(!selection) { statusBar()->showMessage("Select a region to fill first.",5000); return; }
-        editLayer("Content-aware fill",[&](auto &layer) { layer.image=Arc::contentAwareFill(layer,*selection); });
+        editLayer("Content-aware fill",[&](auto &layer) { layer.image=Arc::contentAwareFill(layer,*selection); Arc::rasterize(layer); });
     });
     auto *layerMenu = menuBar()->addMenu("&Layer");
+    layerMenu->addAction("Edit shape…",this,&Window::shapeDialog);
+    layerMenu->addAction("Edit text…",this,[this] { textDialog({},Qt::black,true); });
     layerMenu->addAction("Merge down",QKeySequence("Ctrl+E"),this,[this] { edit("Merge down",Arc::mergeDown); });
     auto *maskMenu = layerMenu->addMenu("Mask");
     auto maskFill = [this](int value) {
@@ -167,6 +171,10 @@ Window::Window() {
     addTool("Clone stamp (S)", "S", Canvas::Tool::Clone);
     addTool("Healing (J)", "J", Canvas::Tool::Heal);
     addTool("Blur brush", "", Canvas::Tool::Blur);
+    addTool("Rectangle shape (U)", "U", Canvas::Tool::ShapeRectangle);
+    addTool("Ellipse shape", "", Canvas::Tool::ShapeEllipse);
+    addTool("Line shape", "", Canvas::Tool::ShapeLine);
+    addTool("Text (T)", "T", Canvas::Tool::Text);
     auto *optionsMenu = new QMenu(this);
     auto *aligned = optionsMenu->addAction("Aligned clone source");
     aligned->setCheckable(true); aligned->setChecked(true);
@@ -285,7 +293,7 @@ Window::Window() {
         connect(s, &QDoubleSpinBox::valueChanged, this, [this, change](double value) { if (!refreshing) editLayer("Layer transform / appearance", [=](auto &l) { change(l, value); }); });
     };
     bind(x, [](auto &l, double v) { l.origin.setX(v); }); bind(y, [](auto &l, double v) { l.origin.setY(v); });
-    bind(w, [](auto &l, double v) { l.size.setWidth(v); }); bind(h, [](auto &l, double v) { l.size.setHeight(v); });
+    bind(w, [](auto &l, double v) { l.size.setWidth(v); if(!l.shape.isEmpty()) l.image=Arc::shapeImage(l.shape,l.size); }); bind(h, [](auto &l, double v) { l.size.setHeight(v); if(!l.shape.isEmpty()) l.image=Arc::shapeImage(l.shape,l.size); });
     bind(angle, [](auto &l, double v) { l.rotation = v; }); bind(opacity, [](auto &l, double v) { l.opacity = v/100; });
     connect(blend, &QComboBox::currentTextChanged, this, [this](const QString &value) { if (!refreshing) editLayer("Blend mode", [&](auto &l) { l.blend = value; }); });
     auto *flipX = new QPushButton("Flip horizontal"), *flipY = new QPushButton("Flip vertical");
@@ -304,10 +312,27 @@ Window::Window() {
         QString name = item->text(); bool visible = item->checkState() == Qt::Checked;
         edit("Layer properties", [=](auto &d) { d.layers[index].name = name; d.layers[index].visible = visible; });
     });
+    connect(canvas, &Canvas::shapeCreated, this, [this](QString kind,QPointF start,QPointF end,QColor color) {
+        edit("Add shape",[&](auto &d) {
+            auto box=QRectF(start,end).normalized();
+            if(kind=="Line") box.adjust(-2,-2,2,2);
+            if(box.width()<1 || box.height()<1) return;
+            Arc::Layer layer; layer.name=kind; layer.origin=box.topLeft(); layer.size=box.size();
+            layer.shape=Arc::shapeStyle(kind,color);
+            if(kind=="Line") {
+                layer.shape["lineWidth"]=4;
+                layer.shape["start"]=QJsonArray{(start.x()-box.x())/box.width(),(start.y()-box.y())/box.height()};
+                layer.shape["end"]=QJsonArray{(end.x()-box.x())/box.width(),(end.y()-box.y())/box.height()};
+            }
+            layer.image=Arc::shapeImage(layer.shape,layer.size);
+            int index=d.active+1; d.layers.insert(index,layer); d.active=index;
+        });
+    });
+    connect(canvas, &Canvas::textRequested, this, [this](QRectF bounds,QColor color) { textDialog(bounds,color); });
     connect(canvas, &Canvas::selected, this, [this](int index) { document.active = index; refresh(); });
     connect(canvas, &Canvas::moved, this, [this](int index, QPointF point) { edit("Move layer", [=](auto &d) { d.layers[index].origin = point; }); });
     connect(canvas, &Canvas::painted, this, [this](int index, const QImage &image) {
-        edit("Paint stroke", [&](auto &d) { d.layers[index].image = image; });
+        edit("Paint stroke", [&](auto &d) { d.layers[index].image = image; Arc::rasterize(d.layers[index]); });
     });
     connect(canvas, &Canvas::maskPainted, this, [this](int index, const QImage &mask) {
         edit("Paint layer mask", [&](auto &d) { d.layers[index].mask = mask; });
@@ -516,7 +541,7 @@ void Window::filterDialog(const QString &kind) {
     timer.start(0); int accepted=dialog.exec(); timer.stop();
     if(accepted==QDialog::Accepted) update();
     canvas->setDocument(original);
-    if(accepted==QDialog::Accepted && valid) edit(kind,[&](auto &d) { if(mask) d.layers[index].mask=result; else d.layers[index].image=result; });
+    if(accepted==QDialog::Accepted && valid) edit(kind,[&](auto &d) { if(mask) d.layers[index].mask=result; else { d.layers[index].image=result; Arc::rasterize(d.layers[index]); } });
 }
 void Window::exportDialog() {
     auto path = QFileDialog::getSaveFileName(this, "Export image (JPEG uses a white background)", "Untitled.png", "PNG (*.png);;JPEG (*.jpg *.jpeg)");

@@ -3,6 +3,8 @@
 #include "../src/selection.h"
 #include "../src/filters.h"
 #include "../src/retouch.h"
+#include "../src/styles.h"
+#include <QPlainTextEdit>
 #include "../src/canvas.h"
 #include "../src/window.h"
 #include <QtTest>
@@ -36,6 +38,79 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void editableStylesAndPersistence() {
+        auto d=sample(); auto &l=d.layers[0];
+        l.shape=Arc::shapeStyle("Ellipse",Qt::green); l.image=Arc::shapeImage(l.shape,l.size);
+        QCOMPARE(l.image.pixelColor(8,6),QColor(Qt::green)); QCOMPARE(l.image.pixelColor(0,0).alpha(),0);
+        l.mask=QImage(1,1,QImage::Format_Grayscale8); l.mask.fill(Qt::white);
+        QTemporaryDir temp; auto path=temp.filePath("editable.comp"); Arc::saveProject(d,path);
+        QCOMPARE(metadata(path)["version"].toInt(),8); auto loaded=Arc::loadProject(path);
+        QCOMPARE(loaded.layers[0].shape,l.shape); QCOMPARE(loaded.layers[0].image,l.image);
+        l.shape={}; l.text=Arc::textStyle(Qt::red); l.text["content"]="Hello Linux";
+        l.text["fontSize"]=24; l.image=Arc::textImage(l.text); l.size=l.image.size();
+        QVERIFY(l.image.width()>50); QVERIFY(l.image.height()>24);
+        for(const auto &alignment:{"Center","Right"}) {
+            l.text["alignment"]=alignment; auto aligned=Arc::textImage(l.text);
+            bool visible=false;
+            for(int y=0;y<aligned.height();++y) for(int x=0;x<aligned.width();++x) visible|=qAlpha(aligned.pixel(x,y))>0;
+            QVERIFY(visible);
+        }
+        l.text["alignment"]="Left";
+        l.text["boxSize"]=QJsonArray{100,120}; l.text["content"]="Hello Linux long paragraph";
+        l.image=Arc::textImage(l.text); l.size=l.image.size(); QCOMPARE(l.image.size(),QSize(100,120));
+        Arc::saveProject(d,path); loaded=Arc::loadProject(path);
+        QCOMPARE(loaded.layers[0].text,l.text); QCOMPARE(loaded.layers[0].image,l.image);
+        l.text["fontSize"]=-10;
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error,Arc::saveProject(d,path));
+        QCOMPARE(Arc::loadProject(path).layers[0].text,loaded.layers[0].text);
+        l.text=loaded.layers[0].text; l.text["unsupported"]=true;
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error,Arc::textImage(l.text));
+        l.text=loaded.layers[0].text; l.text["boxSize"]=QJsonArray{30000,30000};
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error,Arc::textImage(l.text));
+    }
+    void shapeGestureAndRasterizationUndo() {
+        QTemporaryDir temp; auto path=temp.filePath("shape.comp");
+        Arc::Document d; d.size={200,200}; Arc::saveProject(d,path);
+        Window window; window.show(); window.openProject(path); QTest::qWait(10);
+        auto *canvas=window.findChild<Canvas *>(); canvas->fit();
+        auto point=[&](QPointF p) { return canvas->canvasToWidget(p).toPoint(); };
+        canvas->setTool(Canvas::Tool::ShapeEllipse);
+        QTest::mousePress(canvas,Qt::LeftButton,Qt::NoModifier,point({30,30}));
+        QTest::mouseRelease(canvas,Qt::LeftButton,Qt::ShiftModifier,point({80,60}));
+        auto *list=window.findChild<QListWidget *>("layers"); QCOMPARE(list->count(),1);
+        QAction *save=nullptr,*undo=nullptr;
+        for(auto *action:window.findChildren<QAction *>()) {
+            if(action->text()=="&Save project") save=action;
+            if(action->shortcut()==QKeySequence::Undo) undo=action;
+        }
+        QVERIFY(save); QVERIFY(undo); save->trigger();
+        auto saved=Arc::loadProject(path); QVERIFY(!saved.layers[0].shape.isEmpty());
+        QCOMPARE(saved.layers[0].size.width(),saved.layers[0].size.height());
+        Arc::Brush brush; brush.color=Qt::red; canvas->setBrush(brush); canvas->setTool(Canvas::Tool::Brush);
+        QTest::mouseClick(canvas,Qt::LeftButton,Qt::NoModifier,point({50,50}));
+        save->trigger(); QVERIFY(Arc::loadProject(path).layers[0].shape.isEmpty());
+        undo->trigger(); save->trigger(); QVERIFY(!Arc::loadProject(path).layers[0].shape.isEmpty());
+    }
+    void textDialogCancelAndApply() {
+        QTemporaryDir temp; auto path=temp.filePath("text.comp");
+        Arc::Document d; d.size={400,300}; Arc::saveProject(d,path);
+        Window window; window.show(); window.openProject(path); QTest::qWait(10);
+        auto *canvas=window.findChild<Canvas *>(); canvas->fit(); canvas->setTool(Canvas::Tool::Text);
+        auto point=canvas->canvasToWidget({20,20}).toPoint();
+        QTimer::singleShot(0,[] { auto *dialog=qobject_cast<QDialog *>(QApplication::activeModalWidget()); QVERIFY(dialog); dialog->reject(); });
+        QTest::mouseClick(canvas,Qt::LeftButton,Qt::NoModifier,point);
+        QCOMPARE(window.findChild<QListWidget *>("layers")->count(),0);
+        QTimer::singleShot(0,[] {
+            auto *dialog=qobject_cast<QDialog *>(QApplication::activeModalWidget()); QVERIFY(dialog);
+            auto *content=dialog->findChild<QPlainTextEdit *>("textContent"); QVERIFY(content);
+            content->setPlainText("Editable text");
+            QTimer::singleShot(180,dialog,&QDialog::accept);
+        });
+        QTest::mouseClick(canvas,Qt::LeftButton,Qt::NoModifier,point);
+        QCOMPARE(window.findChild<QListWidget *>("layers")->count(),1);
+        for(auto *action:window.findChildren<QAction *>()) if(action->text()=="&Save project") action->trigger();
+        QCOMPARE(Arc::loadProject(path).layers[0].text["content"].toString(),QString("Editable text"));
+    }
     void retouchingPixels() {
         Arc::Layer layer; layer.size={64,64};
         layer.image=QImage(64,64,QImage::Format_ARGB32_Premultiplied); layer.image.fill(Qt::white);
@@ -145,10 +220,10 @@ private slots:
     void rejectUnsupportedOrUnsafe() {
         QTemporaryDir temp; auto path = temp.filePath("art.comp"); Arc::saveProject(sample(), path);
         const auto original = metadata(path);
-        auto m = original; m["version"] = 8; writeMetadata(path, m);
+        auto m = original; m["version"] = 9; writeMetadata(path, m);
         QVERIFY_THROWS_EXCEPTION(std::runtime_error, Arc::loadProject(path));
         QVERIFY_THROWS_EXCEPTION(std::runtime_error, Arc::saveProject(sample(), path));
-        QCOMPARE(metadata(path)["version"].toInt(), 8);
+        QCOMPARE(metadata(path)["version"].toInt(), 9);
         m = original; auto records = m["layers"].toArray(); auto r = records[0].toObject();
         r["maskFile"] = "hidden.png"; records[0] = r; m["layers"] = records; writeMetadata(path,m);
         QVERIFY_THROWS_EXCEPTION(std::runtime_error, Arc::loadProject(path));

@@ -7,7 +7,7 @@
 class Canvas : public QWidget {
     Q_OBJECT
 public:
-    enum class Tool { Move, Brush, Eraser, Rectangle, Ellipse, Lasso, Polygon, Wand, Eyedropper, Gradient, Clone, Heal, Blur };
+    enum class Tool { Move, Brush, Eraser, Rectangle, Ellipse, Lasso, Polygon, Wand, Eyedropper, Gradient, Clone, Heal, Blur, ShapeRectangle, ShapeEllipse, ShapeLine, Text };
     explicit Canvas(QWidget *parent = nullptr);
     void setTool(Tool tool);
     void setBrush(const Arc::Brush &brush);
@@ -32,6 +32,8 @@ signals:
     void maskPainted(int index, QImage mask);
     void colorPicked(QColor color);
     void errorOccurred(QString message);
+    void shapeCreated(QString kind, QPointF start, QPointF end, QColor color);
+    void textRequested(QRectF bounds, QColor color);
 protected:
     void paintEvent(QPaintEvent *) override;
     void mousePressEvent(QMouseEvent *) override;
@@ -50,6 +52,9 @@ private:
     QImage composite;
     double zoom = 1;
     QPointF offset = {40, 40}, pressPoint, originalOrigin, originalOffset;
+    bool drafting = false;
+    QPointF draftAnchor, draftStart, draftEnd;
+    void updateDraft(QPointF point, Qt::KeyboardModifiers modifiers);
     bool space = false, panning = false, dragging = false;
     int dragLayer = -1;
     Tool tool = Tool::Move;

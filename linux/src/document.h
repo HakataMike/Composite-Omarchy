@@ -1,5 +1,6 @@
 #pragma once
 #include <QImage>
+#include <QJsonObject>
 #include <QPainter>
 #include <QUuid>
 #include <QVector>
@@ -10,6 +11,7 @@ struct Layer {
     QUuid id = QUuid::createUuid();
     QString name;
     QImage image;
+    QJsonObject shape, text; // Editable source; image remains the portable raster fallback.
     QImage mask; // Grayscale8 coverage, normalized to the layer bounds.
     bool maskEnabled = true;
     QPointF origin;

@@ -124,6 +124,15 @@ void Canvas::paintEvent(QPaintEvent *) {
             p.restore();
         }
     }
+    if(drafting) {
+        QPen pen(brush.color,tool==Tool::ShapeLine ? 4 : 1); pen.setCosmetic(tool!=Tool::ShapeLine);
+        p.setPen(pen); p.setBrush(tool==Tool::Text ? QBrush(Qt::NoBrush) : QBrush(brush.color));
+        p.setRenderHint(QPainter::Antialiasing);
+        auto box=QRectF(draftStart,draftEnd).normalized();
+        if(tool==Tool::ShapeLine) p.drawLine(draftStart,draftEnd);
+        else if(tool==Tool::ShapeEllipse) p.drawEllipse(box);
+        else p.drawRect(box);
+    }
     if (selection && !selection->isEmpty()) {
         QPen white(Qt::white, 1); white.setCosmetic(true);
         p.setPen(white); p.setBrush(Qt::NoBrush); p.drawPath(*selection);
@@ -145,6 +154,10 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
         panning = true; setCursor(Qt::ClosedHandCursor); return;
     }
     if (event->button() != Qt::LeftButton) return;
+    if(tool==Tool::ShapeRectangle || tool==Tool::ShapeEllipse || tool==Tool::ShapeLine || tool==Tool::Text) {
+        drafting=true; draftAnchor=documentPoint(event->position());
+        updateDraft(draftAnchor,event->modifiers()); return;
+    }
     if(tool==Tool::Eyedropper) {
         auto sample=documentPoint(event->position());
         QPoint point(std::floor(sample.x()),std::floor(sample.y()));
@@ -223,6 +236,7 @@ void Canvas::mouseMoveEvent(QMouseEvent *event) {
     pointerPosition = event->position();
     update();
     if (panning) { offset = originalOffset + event->position() - pressPoint; update(); }
+    else if (drafting) updateDraft(documentPoint(event->position()),event->modifiers());
     else if (painting) updateStroke(documentPoint(event->position()));
     else if (selecting) updateSelection(documentPoint(event->position()));
     else if (dragging) {
@@ -235,7 +249,28 @@ void Canvas::mouseMoveEvent(QMouseEvent *event) {
         refreshImage();
     }
 }
+void Canvas::updateDraft(QPointF point, Qt::KeyboardModifiers modifiers) {
+    auto delta=point-draftAnchor;
+    if(modifiers & Qt::ShiftModifier) {
+        if(tool==Tool::ShapeLine) {
+            double angle=std::round(std::atan2(delta.y(),delta.x())/(M_PI/4))*(M_PI/4);
+            double length=std::hypot(delta.x(),delta.y()); delta={std::cos(angle)*length,std::sin(angle)*length};
+        } else {
+            double side=std::max(std::abs(delta.x()),std::abs(delta.y()));
+            delta={std::copysign(side,delta.x()),std::copysign(side,delta.y())};
+        }
+    }
+    draftStart=(modifiers & Qt::AltModifier) ? draftAnchor-delta : draftAnchor;
+    draftEnd=draftAnchor+delta; update();
+}
 void Canvas::mouseReleaseEvent(QMouseEvent *event) {
+    if(drafting && event->button()==Qt::LeftButton) {
+        updateDraft(documentPoint(event->position()),event->modifiers()); drafting=false; update();
+        if(tool==Tool::Text) emit textRequested(QRectF(draftStart,draftEnd).normalized(),brush.color);
+        else if(QLineF(draftStart,draftEnd).length()>=1) emit shapeCreated(
+            tool==Tool::ShapeLine ? "Line" : tool==Tool::ShapeEllipse ? "Ellipse" : "Rectangle",draftStart,draftEnd,brush.color);
+        return;
+    }
     if (painting && event->button() == Qt::LeftButton) {
         updateStroke(documentPoint(event->position()));
         if (!painting) return;
@@ -276,6 +311,7 @@ void Canvas::wheelEvent(QWheelEvent *event) {
     offset = event->position() - anchor*zoom; emit zoomChanged(zoom); update(); event->accept();
 }
 void Canvas::cancelGesture() {
+    if(drafting) { drafting=false; update(); }
     if (painting) {
         document.layers[dragLayer] = strokeOriginal;
         painting = false; dragLayer = -1;
