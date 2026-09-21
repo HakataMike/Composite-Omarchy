@@ -71,6 +71,7 @@ QStringList blendModes() {
 bool Layer::operator==(const Layer &o) const {
     return id == o.id && name == o.name && image == o.image && origin == o.origin && size == o.size
         && rotation == o.rotation && flipX == o.flipX && flipY == o.flipY && visible == o.visible
+        && mask == o.mask && maskEnabled == o.maskEnabled
         && opacity == o.opacity && blend == o.blend && sampling == o.sampling;
 }
 bool Document::operator==(const Document &o) const {
@@ -89,7 +90,7 @@ void validate(const Document &d) {
     require(std::isfinite(d.resolution) && d.resolution >= 1 && d.resolution <= 9600, "Invalid resolution.");
     require(d.layers.size() <= 10000 && d.active >= -1 && d.active < d.layers.size(), "Invalid layer list.");
     QSet<QUuid> ids;
-    qint64 pixels = 0;
+    qint64 pixels = 0, maskPixels = 0;
     for (const auto &l : d.layers) {
         require(!l.id.isNull() && !ids.contains(l.id), "Duplicate or invalid layer ID."); ids.insert(l.id);
         require(std::isfinite(l.origin.x()) && std::isfinite(l.origin.y()) && std::abs(l.origin.x()) <= 1000000
@@ -102,6 +103,11 @@ void validate(const Document &d) {
         if (!l.image.isNull()) {
             require(validSize(l.image.size()), "Image exceeds supported dimensions.");
             pixels += qint64(l.image.width()) * l.image.height();
+        }
+        if (!l.mask.isNull()) {
+            require(validSize(l.mask.size()) && l.mask.format() == QImage::Format_Grayscale8, "Invalid grayscale mask.");
+            maskPixels += qint64(l.mask.width()) * l.mask.height();
+            require(maskPixels <= MaxPixels, "Combined masks exceed 100 megapixels.");
         }
         require(pixels <= MaxPixels, "Combined source images exceed 100 megapixels.");
     }
@@ -129,7 +135,24 @@ void paint(QPainter &p, const Document &d) {
         p.setOpacity(l.opacity);
         p.setCompositionMode(modes.at(blendModes().indexOf(l.blend)));
         p.setRenderHint(QPainter::SmoothPixmapTransform, l.sampling != "Nearest");
-        p.drawImage(QRectF(QPointF(), l.size), l.image);
+        QImage pixels = l.image;
+        if (!l.mask.isNull() && l.maskEnabled) {
+            pixels = l.image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+            require(!pixels.isNull(), "Insufficient memory for masked image.");
+            auto mask = l.mask.scaled(pixels.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+            require(!mask.isNull(), "Insufficient memory for mask rendering.");
+            // Multiply every premultiplied channel, including alpha, by coverage.
+            for (int y = 0; y < pixels.height(); ++y) {
+                auto *row = reinterpret_cast<QRgb *>(pixels.scanLine(y));
+                const auto *coverage = mask.constScanLine(y);
+                for (int x = 0; x < pixels.width(); ++x) {
+                    const unsigned c = coverage[x]; const QRgb v = row[x];
+                    row[x] = qRgba((qRed(v)*c+127)/255, (qGreen(v)*c+127)/255,
+                                   (qBlue(v)*c+127)/255, (qAlpha(v)*c+127)/255);
+                }
+            }
+        }
+        p.drawImage(QRectF(QPointF(), l.size), pixels);
         p.restore();
     }
     p.restore();
@@ -162,7 +185,7 @@ Document loadProject(const QString &path) {
     auto m = json.object();
     require(m["format"] == "com.compositor.project", "Not a Compositor project.");
     int version = integer(m["version"]);
-    require(version >= 1 && version <= 3, "This Linux preview supports flat raster projects v1–3. Newer projects require features not yet ported.");
+    require(version >= 1 && version <= 4, "This Linux preview supports flat raster projects v1–4. Newer projects require features not yet ported.");
     keys(m, {"format", "version", "colorSpace", "resolution", "documentID", "width", "height", "activeLayerID", "layers"});
     require(m["colorSpace"] == "sRGB" && m["layers"].isArray(), "Invalid project metadata.");
     Document d;
@@ -171,11 +194,11 @@ Document loadProject(const QString &path) {
     if (m.contains("resolution")) d.resolution = number(m["resolution"]);
     validate(d);
     require(m["layers"].toArray().size() <= 10000, "Too many layers.");
-    QVector<QString> files;
+    QVector<QString> files, maskFiles;
     for (const auto value : m["layers"].toArray()) {
         require(value.isObject(), "Invalid layer record.");
         const auto r = value.toObject();
-        keys(r, {"id", "name", "isVisible", "transform", "imageFile", "opacity", "blendMode", "parentID", "isGroup"});
+        keys(r, {"id", "name", "isVisible", "transform", "imageFile", "opacity", "blendMode", "parentID", "isGroup", "maskFile", "maskEnabled"});
         require((!r.contains("parentID") || r["parentID"].isNull())
             && (!r.contains("isGroup") || (r["isGroup"].isBool() && !r["isGroup"].toBool())), "Groups are not supported in this preview.");
         Layer l;
@@ -196,7 +219,17 @@ Document loadProject(const QString &path) {
             asset = r["imageFile"].toString();
             require(asset == r["id"].toString() + ".png", "Unsafe image filename.");
         }
-        d.layers.append(l); files.append(asset);
+        QString maskFile;
+        if (r.contains("maskFile")) {
+            require(version >= 4 && r["maskFile"].isString(), "Invalid mask metadata for this project version.");
+            maskFile = r["maskFile"].toString();
+            require(maskFile == r["id"].toString() + ".mask.png", "Unsafe mask filename.");
+        }
+        if (r.contains("maskEnabled")) {
+            require(!maskFile.isEmpty(), "Mask enabled flag without a mask.");
+            l.maskEnabled = boolean(r["maskEnabled"]);
+        }
+        d.layers.append(l); files.append(asset); maskFiles.append(maskFile);
     }
     if (m.contains("activeLayerID") && !m["activeLayerID"].isNull()) {
         auto active = uuid(m["activeLayerID"]);
@@ -215,6 +248,20 @@ Document loadProject(const QString &path) {
         require(pixels <= MaxPixels, "Combined source images exceed 100 megapixels.");
         d.layers[i].image = readImage(asset);
     }
+    qint64 maskPixels = 0;
+    for (int i = 0; i < maskFiles.size(); ++i) {
+        if (maskFiles[i].isEmpty()) continue;
+        QString asset = path + "/images/" + maskFiles[i];
+        safeFile(asset, root, 512LL * 1024 * 1024);
+        QImageReader reader(asset);
+        require(reader.format() == "png" && validSize(reader.size()), "Invalid mask PNG.");
+        maskPixels += qint64(reader.size().width()) * reader.size().height();
+        require(maskPixels <= MaxPixels, "Combined masks exceed 100 megapixels.");
+        auto mask = reader.read();
+        require(!mask.isNull() && mask.format() == QImage::Format_Grayscale8,
+                "Masks must be 8-bit grayscale PNGs without alpha.");
+        d.layers[i].mask = mask;
+    }
     validate(d);
     return d;
 }
@@ -229,8 +276,10 @@ void saveProject(const Document &d, const QString &path) {
         for (const auto &entry : entries)
             require(entry == "manifest.json" || entry == "images", "Project contains extra files. Save to a new .comp folder to preserve them.");
         QSet<QString> assets;
-        for (const auto &layer : previous.layers)
+        for (const auto &layer : previous.layers) {
             if (!layer.image.isNull()) assets.insert(idString(layer.id).toLower() + ".png");
+            if (!layer.mask.isNull()) assets.insert(idString(layer.id).toLower() + ".mask.png");
+        }
         QDir images(destination.absoluteFilePath() + "/images");
         require(!QFileInfo(images.path()).isSymLink(), "Cannot replace a project with a linked images folder.");
         for (const auto &entry : images.entryInfoList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot))
@@ -240,6 +289,7 @@ void saveProject(const Document &d, const QString &path) {
     QTemporaryDir staging(destination.absolutePath() + "/.compositor-save-XXXXXX");
     require(staging.isValid() && QDir(staging.path()).mkdir("images"), "Cannot create temporary project beside destination.");
     QJsonArray layers;
+    int version = 3;
     for (const auto &l : d.layers) {
         QJsonObject t{{"origin", QJsonArray{l.origin.x(), l.origin.y()}}, {"size", QJsonArray{l.size.width(), l.size.height()}},
             {"rotation", l.rotation}, {"flipX", l.flipX}, {"flipY", l.flipY}, {"sampling", l.sampling}};
@@ -250,9 +300,14 @@ void saveProject(const Document &d, const QString &path) {
             require(l.image.save(staging.path() + "/images/" + name, "PNG"), "Could not write project image.");
             r["imageFile"] = name;
         }
+        if (!l.mask.isNull()) {
+            QString name = idString(l.id) + ".mask.png";
+            require(l.mask.save(staging.path() + "/images/" + name, "PNG"), "Could not write layer mask.");
+            r["maskFile"] = name; r["maskEnabled"] = l.maskEnabled; version = 4;
+        }
         layers.append(r);
     }
-    QJsonObject manifest{{"format", "com.compositor.project"}, {"version", 3}, {"colorSpace", "sRGB"},
+    QJsonObject manifest{{"format", "com.compositor.project"}, {"version", version}, {"colorSpace", "sRGB"},
         {"documentID", idString(d.id)}, {"width", d.size.width()}, {"height", d.size.height()},
         {"resolution", d.resolution}, {"layers", layers}};
     if (d.active >= 0) manifest["activeLayerID"] = idString(d.layers[d.active].id);

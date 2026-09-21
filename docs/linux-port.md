@@ -32,7 +32,8 @@ Qt selects its platform from the desktop environment. If needed, force native Wa
 - Import images through a file dialog, startup arguments, or drag and drop. PNG and JPEG are the baseline; other formats depend on installed Qt image plugins.
 - The first image in a fresh startup document determines canvas dimensions. An explicitly created canvas retains its chosen dimensions.
 - Layers with visibility, inline rename, duplication, deletion, and raising/lowering.
-- Add transparent paint layers sized to the canvas. Brush (`B`) and eraser (`E`) paint on the selected visible raster layer, including transformed layers. Controls set color, diameter in document pixels, and opacity; the cursor outlines the brush footprint. These are round, hard brushes with antialiased edges.
+- Add transparent paint layers sized to the canvas. Brush (`B`) and eraser (`E`) paint on the selected visible raster layer, including transformed layers. Controls set color, diameter in document pixels, and opacity; the cursor outlines the brush footprint. Hardness controls the edge: 100% gives a hard round brush, lower values give a soft falloff. Soft coverage uses 24 nested strokes as an approximation of a linear radial falloff.
+- Add, disable, or remove a layer mask. Choose **Paint image** or **Paint mask**; black hides and white reveals. Color buttons provide black/white presets; other colors become grayscale coverage. The eraser restores white on masks. Masks follow layer transforms and apply to exports. Mask painting requires an enabled mask.
 - Each stroke is one undo step. Stroke opacity is applied once across the entire stroke, including self-overlaps. Escape, focus loss, or changing tools cancels an unfinished stroke.
 - Rectangle selection (`M`) constrains painting and erasing in document coordinates. Drag to select, click to clear, or use Select → Deselect (`Ctrl+D`). Escape cancels a selection drag and restores the previous selection. Selections are session-only and clear when opening a different document or changing canvas size.
 - Drag a layer to move it. Shift constrains movement to one axis. Escape cancels the drag.
@@ -47,13 +48,13 @@ Use File → Open Project to select the `.comp` directory itself. Linux displays
 
 ## Project compatibility and safety
 
-The current Swift implementation writes **version 8**, while the older `project-format.md` overview covers versions 1–6. The Qt loader currently accepts **versions 1–3 with flat raster layers only**. It writes version 3 using the existing manifest and embedded PNG structure, including original source pixels and separate transforms.
+The current Swift implementation writes **version 8**, while the older `project-format.md` overview covers versions 1–6. The Qt loader currently accepts **versions 1–4 with flat raster layers and linked raster masks**. It writes version 4 when masks are present, otherwise version 3 using the existing manifest and embedded PNG structure, including original source pixels and separate transforms.
 
-Groups, masks, effects, editable text, shape metadata, adjustment layers, unknown fields, and later format versions are rejected. Unsupported blend modes are rejected too. This prevents silent loss of features on save. Compatibility has been tested against hand-authored legacy-schema fixtures and Qt round trips; an actual macOS-to-Linux round trip has not yet been verified.
+Groups, clipping masks, unlinked masks, effects, editable text, shape metadata, adjustment layers, unknown fields, and later format versions are rejected. Unsupported blend modes are rejected too. This prevents silent loss of features on save. Compatibility has been tested against hand-authored legacy-schema fixtures and Qt round trips; an actual macOS-to-Linux round trip has not yet been verified.
 
 Saves stage a complete sibling directory, then use Linux `renameat2` to atomically install or exchange it. A failure leaves the previous project in place. Filesystems without the required rename operation report an error rather than falling back to a destructive overwrite. This guarantees atomic replacement, not power-loss durability. Existing destinations must be supported projects and must not contain unrelated files or extra image assets.
 
-The loader validates IDs, transforms, sizes, filenames, asset containment, and combined image pixel counts before accepting a document. Limits are 30,000 pixels per side, 100 megapixels per canvas and for combined source images, 10,000 layers, 4 MiB for the manifest, and 512 MiB per encoded image. Invalid projects do not replace the current document.
+The loader validates IDs, transforms, sizes, filenames, asset containment, and combined image pixel counts before accepting a document. Limits are 30,000 pixels per side, 100 megapixels per canvas, for combined source images, and separately for combined masks, 10,000 layers, 4 MiB for the manifest, and 512 MiB per encoded image. Invalid projects do not replace the current document.
 
 ## Architecture
 
@@ -65,11 +66,13 @@ The loader validates IDs, transforms, sizes, filenames, asset containment, and c
 
 Rendering currently uses QPainter on the CPU and caches a full-resolution composite for display. Layer changes and drag previews rebuild that composite synchronously. Large projects need a later tiled/dirty-region renderer and background processing. Qt's smooth image interpolation also does not yet reproduce the macOS high-quality downsampler exactly.
 
-The upstream C pixel routines remain available. The basic brush uses Qt rasterization; advanced selection and retouching tools have not yet been connected. Painting is clipped to the canvas and the layer's existing source image bounds. Use a canvas-sized paint layer to paint outside an imported image. Pressure, soft brushes, and selection editing beyond rectangle replacement are not implemented yet.
+The upstream C pixel routines remain available. The basic brush uses Qt rasterization; advanced selection and retouching tools have not yet been connected. Painting is clipped to the canvas and the layer's existing source image bounds. Use a canvas-sized paint layer to paint outside an imported image. Pressure and selection editing beyond rectangle replacement are not implemented yet.
+
+A local synthetic performance sample uses a 3840×2160 document with four full-size raster layers and a soft mask stroke. Three paint-and-render previews averaged about **71 ms each** on the development machine (roughly 14 previews/second, excluding UI presentation). This is not a general benchmark: longer strokes, different masks, and larger documents can be slower. Dirty-region rendering and incremental stroke coverage should be the next performance priority.
 
 ## Remaining port work
 
-1. Soft brushes, additional selection tools, masks, and grouping, with corresponding file-format support and regression tests.
+1. Additional selection tools, unlinked/clipping masks, and grouping, with corresponding file-format support and regression tests.
 2. Adjustments, filters, text, and shape tools.
 3. Retouching and a Linux replacement for Apple Vision background removal.
 4. Performance profiling, tiled rendering, and acceleration where measurements justify it.

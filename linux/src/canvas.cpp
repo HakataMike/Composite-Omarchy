@@ -27,6 +27,7 @@ void Canvas::setTool(Tool value) {
     update();
 }
 void Canvas::setBrush(const Arc::Brush &value) { cancelGesture(); brush = value; update(); }
+void Canvas::setMaskTarget(bool enabled) { cancelGesture(); maskTarget = enabled; }
 void Canvas::clearSelection() { cancelGesture(); selection.reset(); update(); }
 void Canvas::updateSelection(QPointF point) {
     const QRectF bounds(QPointF(), document.size);
@@ -43,7 +44,8 @@ void Canvas::updateStroke(QPointF point) {
         settings.eraser = tool == Tool::Eraser;
         QRectF clip(QPointF(), document.size);
         if (selection) clip = clip.intersected(*selection);
-        document.layers[dragLayer].image = Arc::paintStroke(strokeOriginal, strokePath, settings, clip);
+        if (maskTarget) document.layers[dragLayer].mask = Arc::paintMaskStroke(strokeOriginal, strokePath, settings, clip);
+        else document.layers[dragLayer].image = Arc::paintStroke(strokeOriginal, strokePath, settings, clip);
         refreshImage();
     } catch (const std::exception &error) {
         cancelGesture();
@@ -125,6 +127,10 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
             emit errorOccurred("Select a visible image layer, or add a paint layer, before painting.");
             return;
         }
+        if (maskTarget && (document.layers[index].mask.isNull() || !document.layers[index].maskEnabled)) {
+            emit errorOccurred("Add and enable the layer mask before painting it.");
+            return;
+        }
         dragLayer = index;
         strokeOriginal = document.layers[index];
         strokePath = QPainterPath();
@@ -165,11 +171,14 @@ void Canvas::mouseReleaseEvent(QMouseEvent *event) {
         updateStroke(documentPoint(event->position()));
         if (!painting) return;
         int index = dragLayer;
-        QImage result = document.layers[index].image;
-        bool changed = result != strokeOriginal.image;
+        QImage result = maskTarget ? document.layers[index].mask : document.layers[index].image;
+        bool changed = result != (maskTarget ? strokeOriginal.mask : strokeOriginal.image);
         painting = false; dragLayer = -1;
         strokeOriginal = Arc::Layer(); strokePath = QPainterPath();
-        if (changed) emit painted(index, result);
+        if (changed) {
+            if (maskTarget) emit maskPainted(index, result);
+            else emit painted(index, result);
+        }
         return;
     }
     if (selecting && event->button() == Qt::LeftButton) {

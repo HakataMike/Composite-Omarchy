@@ -3,6 +3,7 @@
 #include <QActionGroup>
 #include <QColorDialog>
 #include <QColorSpace>
+#include <QCheckBox>
 #include <memory>
 #include <QCloseEvent>
 #include <QComboBox>
@@ -88,6 +89,14 @@ Window::Window() {
         auto chosen = QColorDialog::getColor(settings->color, this, "Paint color");
         if (chosen.isValid()) { settings->color = chosen; updateColorIcon(); canvas->setBrush(*settings); }
     });
+    auto *black = tools->addAction("Black");
+    auto *white = tools->addAction("White");
+    connect(black, &QAction::triggered, this, [this, settings, updateColorIcon] {
+        settings->color = Qt::black; updateColorIcon(); canvas->setBrush(*settings);
+    });
+    connect(white, &QAction::triggered, this, [this, settings, updateColorIcon] {
+        settings->color = Qt::white; updateColorIcon(); canvas->setBrush(*settings);
+    });
     tools->addWidget(new QLabel(" Size "));
     auto *size = new QSpinBox; size->setObjectName("brushSize"); size->setAccessibleName("Brush diameter");
     size->setRange(1,2000); size->setValue(24); size->setSuffix(" px"); size->setKeyboardTracking(false); tools->addWidget(size);
@@ -96,6 +105,10 @@ Window::Window() {
     auto *strength = new QSpinBox; strength->setObjectName("brushOpacity"); strength->setAccessibleName("Brush opacity");
     strength->setRange(1,100); strength->setValue(100); strength->setSuffix(" %"); strength->setKeyboardTracking(false); tools->addWidget(strength);
     connect(strength, &QSpinBox::valueChanged, this, [this, settings](int value) { settings->opacity = value/100.0; canvas->setBrush(*settings); });
+    tools->addWidget(new QLabel(" Hardness "));
+    auto *hardness = new QSpinBox; hardness->setObjectName("brushHardness"); hardness->setAccessibleName("Brush hardness");
+    hardness->setRange(0,100); hardness->setValue(100); hardness->setSuffix(" %"); hardness->setKeyboardTracking(false); tools->addWidget(hardness);
+    connect(hardness, &QSpinBox::valueChanged, this, [this, settings](int value) { settings->hardness = value/100.0; canvas->setBrush(*settings); });
     auto *dock = new QDockWidget("Layers & transform", this);
     dock->setFeatures(QDockWidget::NoDockWidgetFeatures); dock->setMinimumWidth(265);
     auto *panel = new QWidget; auto *layout = new QVBoxLayout(panel);
@@ -124,6 +137,29 @@ Window::Window() {
     button("↑", [this] { edit("Raise layer", [](auto &d) { if (d.active >= 0 && d.active+1 < d.layers.size()) { d.layers.swapItemsAt(d.active, d.active+1); ++d.active; } }); });
     button("↓", [this] { edit("Lower layer", [](auto &d) { if (d.active > 0) { d.layers.swapItemsAt(d.active, d.active-1); --d.active; } }); });
     layout->addLayout(buttons);
+    auto *maskRow = new QHBoxLayout;
+    addMask = new QPushButton("Add mask"); addMask->setObjectName("addMask");
+    removeMask = new QPushButton("Remove mask"); removeMask->setObjectName("removeMask");
+    maskRow->addWidget(addMask); maskRow->addWidget(removeMask); layout->addLayout(maskRow);
+    connect(addMask, &QPushButton::clicked, this, [this] {
+        editLayer("Add layer mask", [](auto &layer) {
+            if (!layer.mask.isNull()) return;
+            layer.mask = QImage(1,1,QImage::Format_Grayscale8); layer.mask.fill(Qt::white); layer.maskEnabled = true;
+        });
+        if (document.active >= 0 && !document.layers[document.active].mask.isNull()) paintTarget->setCurrentIndex(1);
+    });
+    connect(removeMask, &QPushButton::clicked, this, [this] {
+        editLayer("Remove layer mask", [](auto &layer) { layer.mask = QImage(); layer.maskEnabled = true; });
+    });
+    maskEnabled = new QCheckBox("Enable mask"); maskEnabled->setObjectName("maskEnabled"); layout->addWidget(maskEnabled);
+    connect(maskEnabled, &QCheckBox::toggled, this, [this](bool value) {
+        if (!refreshing) editLayer("Toggle layer mask", [=](auto &layer) { layer.maskEnabled = value; });
+    });
+    paintTarget = new QComboBox; paintTarget->setObjectName("paintTarget"); paintTarget->addItems({"Paint image", "Paint mask"});
+    layout->addWidget(paintTarget);
+    connect(paintTarget, &QComboBox::currentIndexChanged, this, [this](int value) { canvas->setMaskTarget(value == 1); });
+    maskPreview = new QLabel; maskPreview->setToolTip("Mask coverage: black hides, white reveals. The eraser restores white.");
+    layout->addWidget(maskPreview);
     inspector = new QWidget; auto *form = new QFormLayout(inspector);
     auto spin = [&](QString label, double low, double high, QString objectName) {
         auto *s = new QDoubleSpinBox; s->setRange(low, high); s->setDecimals(2); s->setKeyboardTracking(false); s->setObjectName(objectName);
@@ -161,6 +197,9 @@ Window::Window() {
     connect(canvas, &Canvas::painted, this, [this](int index, const QImage &image) {
         edit("Paint stroke", [&](auto &d) { d.layers[index].image = image; });
     });
+    connect(canvas, &Canvas::maskPainted, this, [this](int index, const QImage &mask) {
+        edit("Paint layer mask", [&](auto &d) { d.layers[index].mask = mask; });
+    });
     connect(canvas, &Canvas::errorOccurred, this, [this](const QString &message) { QMessageBox::warning(this, "Painting", message); });
     connect(canvas, &Canvas::filesDropped, this, &Window::importImages);
     zoomLabel = new QLabel; statusBar()->addPermanentWidget(zoomLabel);
@@ -186,6 +225,15 @@ void Window::refresh() {
         x->setValue(l.origin.x()); y->setValue(l.origin.y()); w->setValue(l.size.width()); h->setValue(l.size.height());
         angle->setValue(l.rotation); opacity->setValue(l.opacity*100); blend->setCurrentText(l.blend);
     }
+    const bool hasLayer = document.active >= 0;
+    const bool hasMask = hasLayer && !document.layers[document.active].mask.isNull();
+    addMask->setEnabled(hasLayer && !hasMask && !document.layers[document.active].image.isNull());
+    removeMask->setEnabled(hasMask); maskEnabled->setEnabled(hasMask);
+    maskEnabled->setChecked(hasMask && document.layers[document.active].maskEnabled);
+    paintTarget->setEnabled(hasMask);
+    if (!hasMask) paintTarget->setCurrentIndex(0);
+    if (hasMask) maskPreview->setPixmap(QPixmap::fromImage(document.layers[document.active].mask.scaled(64,48,Qt::IgnoreAspectRatio)));
+    else maskPreview->clear();
     canvas->setDocument(document);
     setWindowTitle((projectPath.isEmpty() ? "Untitled" : QFileInfo(projectPath).fileName()) + "[*] — Compositor ARC");
     setWindowModified(!history.isClean()); refreshing = false;

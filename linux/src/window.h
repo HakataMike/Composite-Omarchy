@@ -7,6 +7,8 @@ class QListWidget;
 class QDoubleSpinBox;
 class QComboBox;
 class QLabel;
+class QCheckBox;
+class QPushButton;
 class Window : public QMainWindow {
     Q_OBJECT
 public:
@@ -23,7 +25,10 @@ private:
     QListWidget *layers;
     QWidget *inspector;
     QDoubleSpinBox *x, *y, *w, *h, *angle, *opacity;
-    QComboBox *blend;
+    QComboBox *blend, *paintTarget;
+    QCheckBox *maskEnabled;
+    QPushButton *addMask, *removeMask;
+    QLabel *maskPreview;
     QLabel *zoomLabel;
     bool refreshing = false;
     bool sizeFirstImport = true;

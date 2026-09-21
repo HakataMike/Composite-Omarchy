@@ -12,6 +12,9 @@
 #include <QMessageBox>
 #include <QColorSpace>
 #include <QPushButton>
+#include <QCheckBox>
+#include <QComboBox>
+#include <QElapsedTimer>
 
 class Tests : public QObject {
     Q_OBJECT
@@ -232,6 +235,101 @@ private slots:
         QVERIFY(undo); undo->trigger(); QCOMPARE(list->count(), 1);
         QVERIFY(window.isWindowModified()); // The new layer remains; one stroke was one edit.
         undo->trigger(); QCOMPARE(list->count(), 0); QVERIFY(!window.isWindowModified());
+    }
+    void maskRenderingAndPersistence() {
+        auto d = sample(); auto source = d.layers[0].image;
+        auto &l = d.layers[0]; l.mask = QImage(1,1,QImage::Format_Grayscale8); l.mask.fill(QColor(128,128,128));
+        auto rendered = Arc::render(d);
+        QCOMPARE(rendered.pixelColor(4,5).alpha(), 128);
+        QCOMPARE(rendered.pixelColor(4,5).red(), 255);
+        QCOMPARE(l.image, source);
+        l.maskEnabled = false; QCOMPARE(Arc::render(d).pixelColor(4,5), QColor(Qt::red));
+        QTemporaryDir temp; auto path = temp.filePath("mask.comp"); Arc::saveProject(d,path);
+        QCOMPARE(metadata(path)["version"].toInt(), 4);
+        auto loaded = Arc::loadProject(path);
+        QVERIFY(!loaded.layers[0].maskEnabled); QCOMPARE(loaded.layers[0].mask.constScanLine(0)[0], uchar(128));
+        l.maskEnabled = true; l.rotation = 90; l.flipX = true; Arc::saveProject(d,path);
+        QCOMPARE(Arc::render(Arc::loadProject(path)), Arc::render(d));
+        Arc::exportImage(d,temp.filePath("masked.png"));
+        QCOMPARE(QImage(temp.filePath("masked.png")).pixelColor(10,9).alpha(), 128);
+        auto manifest = metadata(path); auto layers = manifest["layers"].toArray(); auto layer = layers[0].toObject();
+        QString asset = path+"/images/"+layer["maskFile"].toString();
+        QImage invalid(1,1,QImage::Format_ARGB32); invalid.fill(Qt::transparent); QVERIFY(invalid.save(asset));
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error, Arc::loadProject(path));
+        layer["maskFile"] = "../escape.mask.png"; layers[0] = layer; manifest["layers"] = layers; writeMetadata(path,manifest);
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error, Arc::loadProject(path));
+    }
+    void maskBrushAndSoftEdges() {
+        auto d = sample(); auto &l = d.layers[0];
+        l.image = QImage(64,64,QImage::Format_ARGB32_Premultiplied); l.image.fill(Qt::red);
+        l.size = {128,128}; l.origin = {10,20}; l.rotation = 90; l.flipX = true;
+        l.mask = QImage(1,1,QImage::Format_Grayscale8); l.mask.fill(Qt::white);
+        QCOMPARE(l.mask.constScanLine(0)[0], uchar(255));
+        QTransform mapping = l.transform(); mapping.scale(2,2);
+        QPainterPath dot; dot.moveTo(mapping.map(QPointF(32,32)));
+        Arc::Brush brush; brush.diameter = 80; brush.hardness = 0; brush.color = Qt::black;
+        auto mask = Arc::paintMaskStroke(l,dot,brush,QRectF(0,0,200,200));
+        QCOMPARE(mask.size(), QSize(64,64));
+        QVERIFY(mask.constScanLine(32)[32] < 35);
+        QVERIFY(mask.constScanLine(32)[42] > mask.constScanLine(32)[32]);
+        QVERIFY(mask.constScanLine(32)[42] < 230);
+        QCOMPARE(mask.constScanLine(0)[0], uchar(255));
+        QCOMPARE(l.mask.constScanLine(0)[0], uchar(255));
+        l.mask = mask; brush.hardness = 1; brush.eraser = true;
+        auto restored = Arc::paintMaskStroke(l,dot,brush,QRectF(0,0,200,200));
+        QCOMPARE(restored.constScanLine(32)[32], uchar(255));
+        QCOMPARE(l.image.pixelColor(32,32), QColor(Qt::red));
+        brush.eraser = false; brush.hardness = 0; brush.opacity = 0.5;
+        auto soft = Arc::paintStroke(l,dot,brush,QRectF(0,0,200,200));
+        QVERIFY(soft.pixelColor(32,32).red() > 110); // Half-opacity paint cannot fully cover red.
+        QVERIFY(soft.pixelColor(32,32).red() < 160);
+    }
+    void maskControlsUndoAndCancel() {
+        QTemporaryDir temp; QVERIFY(sample().layers[0].image.save(temp.filePath("red.png")));
+        Window window; window.show(); QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.importImages({temp.filePath("red.png")});
+        auto *add = window.findChild<QPushButton *>("addMask");
+        auto *remove = window.findChild<QPushButton *>("removeMask");
+        auto *target = window.findChild<QComboBox *>("paintTarget");
+        auto *enabled = window.findChild<QCheckBox *>("maskEnabled");
+        QVERIFY(add->isEnabled()); QTest::mouseClick(add,Qt::LeftButton);
+        QVERIFY(enabled->isChecked()); QCOMPARE(target->currentIndex(),1);
+        auto *canvas = window.findChild<Canvas *>(); canvas->setTool(Canvas::Tool::Brush); canvas->fit();
+        auto point = canvas->canvasToWidget({8,6}).toPoint();
+        QSignalSpy masks(canvas, &Canvas::maskPainted), images(canvas, &Canvas::painted);
+        QTest::mousePress(canvas,Qt::LeftButton,Qt::NoModifier,point);
+        QTest::keyClick(canvas,Qt::Key_Escape); QTest::mouseRelease(canvas,Qt::LeftButton,Qt::NoModifier,point);
+        QCOMPARE(masks.size(),0);
+        QTest::mouseClick(canvas,Qt::LeftButton,Qt::NoModifier,point);
+        QCOMPARE(masks.size(),1); QCOMPARE(images.size(),0);
+        QCOMPARE(masks[0][1].value<QImage>().constScanLine(6)[8], uchar(0));
+        QTest::mouseClick(enabled,Qt::LeftButton,Qt::NoModifier,QPoint(8,enabled->height()/2)); QVERIFY(!enabled->isChecked());
+        QAction *undo = nullptr;
+        for (auto *action : window.findChildren<QAction *>()) if (action->shortcut() == QKeySequence::Undo) undo = action;
+        QVERIFY(undo); undo->trigger(); QVERIFY(enabled->isChecked());
+        QTest::mouseClick(remove,Qt::LeftButton); QVERIFY(!enabled->isEnabled()); QCOMPARE(target->currentIndex(),0);
+        undo->trigger(); QVERIFY(enabled->isEnabled());
+        undo->trigger(); // Undo paint.
+        undo->trigger(); // Undo add mask.
+        QVERIFY(!enabled->isEnabled());
+        undo->trigger(); QVERIFY(!window.isWindowModified());
+    }
+    void paintingPerformanceSample() {
+        Arc::Document d; d.size = {3840,2160};
+        for (int i = 0; i < 4; ++i) {
+            Arc::Layer l; l.image = QImage(d.size,QImage::Format_ARGB32_Premultiplied); l.image.fill(QColor(50*i,80,150));
+            l.size = d.size; l.opacity = 0.5; d.layers.append(l);
+        }
+        d.layers[3].mask = QImage(1,1,QImage::Format_Grayscale8); d.layers[3].mask.fill(Qt::white);
+        QPainterPath path; path.moveTo(300,400); path.lineTo(1600,900);
+        Arc::Brush brush; brush.hardness = 0.3; brush.diameter = 120;
+        QElapsedTimer timer; timer.start();
+        for (int i=0; i<3; ++i) {
+            auto preview = d;
+            preview.layers[3].mask = Arc::paintMaskStroke(d.layers[3],path,brush,QRectF(QPointF(),d.size));
+            QVERIFY(!Arc::render(preview).isNull());
+        }
+        qInfo("4K / four layers / soft mask stroke + full render: %.1f ms per preview (3 samples)", timer.nsecsElapsed()/3000000.0);
     }
     void windowUndoAndLayerControls() {
         QTemporaryDir temp; auto image = sample().layers[0].image; QVERIFY(image.save(temp.filePath("red.png")));

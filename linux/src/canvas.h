@@ -11,6 +11,7 @@ public:
     explicit Canvas(QWidget *parent = nullptr);
     void setTool(Tool tool);
     void setBrush(const Arc::Brush &brush);
+    void setMaskTarget(bool enabled);
     void clearSelection();
     std::optional<QRectF> selectionBounds() const { return selection; }
     void setDocument(const Arc::Document &document);
@@ -23,6 +24,7 @@ signals:
     void filesDropped(QStringList paths);
     void zoomChanged(double zoom);
     void painted(int index, QImage image);
+    void maskPainted(int index, QImage mask);
     void errorOccurred(QString message);
 protected:
     void paintEvent(QPaintEvent *) override;
@@ -48,6 +50,7 @@ private:
     Arc::Layer strokeOriginal;
     QPainterPath strokePath;
     bool painting = false, selecting = false;
+    bool maskTarget = false;
     std::optional<QRectF> selection, previousSelection;
     QPointF selectionStart;
     QPointF pointerPosition;

@@ -10,6 +10,8 @@ struct Layer {
     QUuid id = QUuid::createUuid();
     QString name;
     QImage image;
+    QImage mask; // Grayscale8 coverage, normalized to the layer bounds.
+    bool maskEnabled = true;
     QPointF origin;
     QSizeF size;
     double rotation = 0;
