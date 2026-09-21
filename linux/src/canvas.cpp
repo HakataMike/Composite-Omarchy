@@ -5,7 +5,12 @@
 #include "hierarchy.h"
 #include "masks.h"
 #include "geometry.h"
+#include "styles.h"
 #include <QMouseEvent>
+#include <QPlainTextEdit>
+#include <QTextDocument>
+#include <QTextCursor>
+#include <QTextBlockFormat>
 #include <QWheelEvent>
 #include <QKeyEvent>
 #include <QMimeData>
@@ -23,11 +28,12 @@ Canvas::Canvas(QWidget *parent) : QWidget(parent) {
     setToolTip("V: Move. B: Brush. E: Eraser. M: Rectangle selection. Wheel to zoom. Space-drag or middle-drag to pan. Escape cancels the current gesture.");
 }
 void Canvas::setDocument(const Arc::Document &d) {
-    cancelGesture();
+    finishTextEditing(false); cancelGesture();
     if (document.id != d.id || document.size != d.size) { selection.reset(); selectionMask={}; cloneAnchor.reset(); cloneOffset.reset(); lastBrushPoint.reset(); }
     document = d; refreshImage();
 }
 void Canvas::setTool(Tool value) {
+    if(!finishTextEditing()) return;
     cancelGesture(); tool = value;
     setCursor(tool == Tool::Move ? Qt::ArrowCursor : Qt::CrossCursor);
     update();
@@ -576,4 +582,54 @@ void Canvas::updateTransform(QPointF point,Qt::KeyboardModifiers modifiers) {
         else Arc::transformLayers(document,transformIDs,boxOriginal,changed);
     }
     Arc::validate(document); refreshImage();
+}
+
+void Canvas::beginTextEditing(int index) {
+    if(!finishTextEditing()) return;
+    cancelGesture();
+    if(index<0 || index>=document.layers.size() || document.layers[index].text.isEmpty()) return;
+    textOriginal=document; textIndex=index; const auto layer=document.layers[index]; const auto style=layer.text;
+    textEditor=new QPlainTextEdit(this); textEditor->setObjectName("inlineTextEditor"); textEditor->setPlainText(style["content"].toString());
+    textEditor->setToolTip("Ctrl+Enter applies text. Escape cancels. Font and paragraph controls are in Layer → Edit text.");
+    auto bounds=layer.transform().mapRect(QRectF(QPointF(),layer.size));
+    QRect box(canvasToWidget(bounds.topLeft()).toPoint(),QSize(std::max(160,int(bounds.width()*zoom)),std::max(90,int(bounds.height()*zoom))));
+    box.setWidth(std::min(box.width(),width())); box.setHeight(std::min(box.height(),height()));
+    box.moveLeft(std::clamp(box.left(),0,std::max(0,width()-box.width()))); box.moveTop(std::clamp(box.top(),0,std::max(0,height()-box.height())));
+    textEditor->setGeometry(box); QFont font(style["fontName"].toString());
+    double scale=zoom*layer.size.width()/layer.image.width(); font.setPixelSize(std::clamp(qRound(style["fontSize"].toDouble()*scale),1,512));
+    font.setLetterSpacing(QFont::AbsoluteSpacing,style["tracking"].toDouble()*scale); textEditor->setFont(font);
+    auto colors=textEditor->palette(); colors.setColor(QPalette::Text,QColor::fromRgbF(style["red"].toDouble(),style["green"].toDouble(),style["blue"].toDouble()));
+    colors.setColor(QPalette::Base,QColor(245,245,245)); textEditor->setPalette(colors); textEditor->document()->setDocumentMargin(12*scale);
+    auto cursor=textEditor->textCursor(); cursor.select(QTextCursor::Document); QTextBlockFormat format;
+    auto align=style["alignment"].toString(); format.setAlignment(align=="Center" ? Qt::AlignHCenter : align=="Right" ? Qt::AlignRight : Qt::AlignLeft);
+    cursor.mergeBlockFormat(format); textEditor->setTextCursor(cursor); textEditor->installEventFilter(this);
+    document.layers[index].visible=false; refreshImage(); textEditor->show(); textEditor->setFocus();
+}
+bool Canvas::finishTextEditing(bool accept) {
+    if(!textEditor) return true;
+    auto *editor=textEditor; auto content=editor->toPlainText(); int index=textIndex;
+    auto changed=textOriginal.layers[index]; bool modified=content!=changed.text["content"].toString();
+    if(accept && modified) {
+        try {
+            auto before=changed; double sx=changed.size.width()/changed.image.width(),sy=changed.size.height()/changed.image.height();
+            changed.text["content"]=content; changed.image=Arc::textImage(changed.text);
+            changed.size={changed.image.width()*sx,changed.image.height()*sy}; Arc::followMask(before,changed);
+            auto probe=textOriginal; probe.layers[index]=changed; Arc::validate(probe);
+        } catch(const std::exception &error) { emit errorOccurred(QString::fromUtf8(error.what())); return false; }
+    }
+    textEditor=nullptr; textIndex=-1; editor->removeEventFilter(this); editor->hide(); editor->deleteLater();
+    document=textOriginal; refreshImage();
+    if(accept && modified) emit textEdited(index,changed);
+    return true;
+}
+bool Canvas::eventFilter(QObject *object,QEvent *event) {
+    if(object==textEditor) {
+        if(event->type()==QEvent::KeyPress) {
+            auto *key=static_cast<QKeyEvent *>(event);
+            if(key->key()==Qt::Key_Escape) { finishTextEditing(false); setFocus(); return true; }
+            if((key->key()==Qt::Key_Return || key->key()==Qt::Key_Enter) && (key->modifiers() & Qt::ControlModifier)) { finishTextEditing(); setFocus(); return true; }
+        }
+        if(event->type()==QEvent::FocusOut) finishTextEditing();
+    }
+    return QWidget::eventFilter(object,event);
 }

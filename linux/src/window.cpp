@@ -423,7 +423,18 @@ Window::Window() {
             int index=d.active+1; d.layers.insert(index,layer); d.active=index;
         });
     });
-    connect(canvas, &Canvas::textRequested, this, [this](QRectF bounds,QColor color) { textDialog(bounds,color); });
+    connect(canvas, &Canvas::textRequested, this, [this](QRectF bounds,QColor color) {
+        if(bounds.width()<2 && bounds.height()<2) for(int i:Arc::visibleLayerOrder(document,true)) {
+            const auto &layer=document.layers[i];
+            if(!layer.text.isEmpty() && QRectF(QPointF(),layer.size).contains(layer.transform().inverted().map(bounds.topLeft()))) {
+                document.active=i; refresh(); canvas->beginTextEditing(i); return;
+            }
+        }
+        textDialog(bounds,color);
+    });
+    connect(canvas,&Canvas::textEdited,this,[this](int index,const Arc::Layer &layer) {
+        edit("Edit text",[&](auto &d) { d.layers[index]=layer; });
+    });
     connect(layers,&QTreeWidget::itemSelectionChanged,this,[this] {
         if(refreshing) return;
         QVector<QUuid> ids; for(auto *item:layers->selectedItems()) ids.append(item->data(0,Qt::UserRole+1).toUuid());
@@ -554,11 +565,13 @@ void Window::importImages(const QStringList &paths) {
     canvas->fit();
 }
 bool Window::mayDiscard() {
+    if(!canvas->finishTextEditing()) return false;
     if (history.isClean()) return true;
     auto answer = QMessageBox::warning(this, "Unsaved changes", "Save your project before continuing?", QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
     return answer == QMessageBox::Discard || (answer == QMessageBox::Save && save());
 }
 bool Window::save(bool choosePath) {
+    if(!canvas->finishTextEditing()) return false;
     QString path = projectPath;
     if (choosePath || path.isEmpty()) {
         path = QFileDialog::getSaveFileName(this, "Save project folder", path.isEmpty() ? "Untitled.comp" : path, "Compositor project (*.comp)", nullptr, QFileDialog::DontUseNativeDialog);

@@ -4,12 +4,15 @@
 #include <QWidget>
 #include <optional>
 
+class QPlainTextEdit;
 class Canvas : public QWidget {
     Q_OBJECT
 public:
     enum class Tool { Move, Brush, Eraser, Rectangle, Ellipse, Lasso, Polygon, Wand, Eyedropper, Gradient, Clone, Heal, Blur, ShapeRectangle, ShapeEllipse, ShapeLine, Text };
     explicit Canvas(QWidget *parent = nullptr);
     void setTool(Tool tool);
+    void beginTextEditing(int index);
+    bool finishTextEditing(bool accept = true);
     void setSelectedLayers(QVector<QUuid> ids) { selectedIDs=std::move(ids); update(); }
     void setBrush(const Arc::Brush &brush);
     void setMaskTarget(bool enabled);
@@ -46,7 +49,9 @@ signals:
     void errorOccurred(QString message);
     void shapeCreated(QString kind, QPointF start, QPointF end, QColor color);
     void textRequested(QRectF bounds, QColor color);
+    void textEdited(int index,Arc::Layer layer);
 protected:
+    bool eventFilter(QObject *, QEvent *) override;
     void paintEvent(QPaintEvent *) override;
     void mousePressEvent(QMouseEvent *) override;
     void mouseDoubleClickEvent(QMouseEvent *) override;
@@ -60,6 +65,9 @@ protected:
     void dragEnterEvent(QDragEnterEvent *) override;
     void dropEvent(QDropEvent *) override;
 private:
+    QPlainTextEdit *textEditor=nullptr;
+    int textIndex=-1;
+    Arc::Document textOriginal;
     Arc::Document document;
     QImage composite;
     double zoom = 1;

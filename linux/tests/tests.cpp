@@ -51,6 +51,24 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void inlineTextApplyCancelSaveAndUndo() {
+        Arc::Document d; d.size={400,200}; Arc::Layer text; text.name="Text"; text.text=Arc::textStyle(Qt::black);
+        text.text["fontSize"]=20; text.text["boxSize"]=QJsonArray{200,100}; text.image=Arc::textImage(text.text); text.size=text.image.size(); text.origin={20,20}; d.layers={text}; d.active=0;
+        QTemporaryDir temp; auto file=temp.filePath("inline.comp"); Arc::saveProject(d,file);
+        Window window; window.show(); window.openProject(file); auto *canvas=window.findChild<Canvas *>(); canvas->fit(); canvas->setTool(Canvas::Tool::Text);
+        QTest::mouseClick(canvas,Qt::LeftButton,Qt::NoModifier,canvas->canvasToWidget({30,30}).toPoint());
+        auto *editor=canvas->findChild<QPlainTextEdit *>("inlineTextEditor"); QVERIFY(editor && editor->isVisible());
+        QTest::keyClicks(editor,"Inline edit"); QTest::keyClick(editor,Qt::Key_Return,Qt::ControlModifier);
+        QAction *save=nullptr,*undo=nullptr; for(auto *a:window.findChildren<QAction *>()) { if(a->text()=="&Save project") save=a; if(a->shortcut()==QKeySequence::Undo) undo=a; }
+        QVERIFY(save && undo); save->trigger(); QCOMPARE(Arc::loadProject(file).layers[0].text["content"].toString(),QString("Inline edit"));
+        canvas->beginTextEditing(0); editor=nullptr; for(auto *item:canvas->findChildren<QPlainTextEdit *>()) if(item->isVisible()) editor=item;
+        QVERIFY(editor); editor->setPlainText("Canceled"); QTest::keyClick(editor,Qt::Key_Escape); save->trigger();
+        QCOMPARE(Arc::loadProject(file).layers[0].text["content"].toString(),QString("Inline edit"));
+        undo->trigger(); save->trigger(); QCOMPARE(Arc::loadProject(file).layers,d.layers);
+        canvas->beginTextEditing(0); editor=nullptr; for(auto *item:canvas->findChildren<QPlainTextEdit *>()) if(item->isVisible()) editor=item;
+        QVERIFY(editor); editor->setPlainText("Saved while typing"); save->trigger();
+        QCOMPARE(Arc::loadProject(file).layers[0].text["content"].toString(),QString("Saved while typing"));
+    }
     void groupGeometryProjectionAndDistortion() {
         auto d=sample(); d.layers[0].rotation=30;
         auto source=d.layers[0].image; Arc::groupLayers(d,{d.layers[0].id}); auto folder=d.layers[d.active]; folder.size.setWidth(folder.size.width()*2);
