@@ -88,7 +88,8 @@ Window::Window() {
     filterMenu->addAction("Content-aware fill",this,[this] {
         auto selection=canvas->selectedPath();
         if(!selection) { statusBar()->showMessage("Select a region to fill first.",5000); return; }
-        editLayer("Content-aware fill",[&](auto &layer) { layer.image=Arc::contentAwareFill(layer,*selection); Arc::rasterize(layer); });
+        auto coverage=canvas->selectedCoverage();
+        editLayer("Content-aware fill",[&](auto &layer) { auto changed=Arc::contentAwareFill(layer,*selection); layer.image=Arc::limitToSelection(layer.image,changed,layer,coverage); Arc::rasterize(layer); });
     });
     auto *layerMenu = menuBar()->addMenu("&Layer");
     layerMenu->addAction("Group selected layers",QKeySequence("Ctrl+G"),this,[this] {
@@ -161,24 +162,43 @@ Window::Window() {
         QPainterPath path; path.addRect(QRectF(QPointF(),document.size)); canvas->setSelection(path);
     });
     selectMenu->addAction("Invert selection",QKeySequence("Ctrl+Shift+I"),this,[this] {
-        QPainterPath path; path.addRect(QRectF(QPointF(),document.size));
-        if(auto selected=canvas->selectedPath()) path=path.subtracted(*selected);
-        canvas->setSelection(path);
+        report([&] { canvas->invertSelection(); });
     });
-    selectMenu->addAction("Select layer pixels",this,[this] {
+    selectMenu->addAction("Feather selection…",this,[this] {
+        bool accepted=false; int radius=QInputDialog::getInt(this,"Feather selection","Radius (document pixels)",5,0,250,1,&accepted);
+        if(accepted) report([&] { canvas->featherSelection(radius); });
+    });
+    auto loadSelection=[this](bool mask) {
         if(document.active<0) return;
-        report([&] { const auto &l=document.layers[document.active]; if(l.image.isNull()) return;
-            QTransform map=l.transform(); map.scale(l.size.width()/l.image.width(),l.size.height()/l.image.height());
-            canvas->setSelection(map.map(Arc::alphaSelection(l.image)));
+        report([&] {
+            auto layer=mask ? Arc::maskTargetLayer(document.layers[document.active]) : document.layers[document.active];
+            if(layer.image.isNull()) return;
+            auto source=mask ? layer.image.convertToFormat(QImage::Format_Grayscale8) : Arc::alphaCoverage(layer.image);
+            QImage coverage(document.size,QImage::Format_Grayscale8); coverage.fill(Qt::black);
+            { QPainter p(&coverage); p.setTransform(layer.transform()); p.setRenderHint(QPainter::SmoothPixmapTransform); p.drawImage(QRectF(QPointF(),layer.size),source); }
+            canvas->setSelectionCoverage(coverage);
         });
+    };
+    selectMenu->addAction("Select layer pixels",this,[=] { loadSelection(false); });
+    selectMenu->addAction("Select layer mask",this,[=] { loadSelection(true); });
+    auto copyPixels=[this](bool merged) {
+        auto coverage=canvas->selectedCoverage();
+        QImage image;
+        if(merged) {
+            image=Arc::render(document);
+            if(!coverage.isNull()) { QImage empty(image.size(),image.format()); empty.fill(Qt::transparent); Arc::Layer target; target.size=document.size; image=Arc::limitToSelection(empty,image,target,coverage); }
+        } else image=Arc::selectedLayerPixels(document,coverage);
+        if(auto selected=canvas->selectedPath()) image=image.copy(selected->boundingRect().toAlignedRect().intersected(image.rect()));
+        if(!image.isNull()) QApplication::clipboard()->setImage(image);
+    };
+    editMenu->addAction("Copy merged",QKeySequence("Ctrl+Shift+C"),this,[this,copyPixels] { report([&] { copyPixels(true); }); });
+    editMenu->addAction("Copy selected pixels",QKeySequence::Copy,this,[this,copyPixels] { report([&] { copyPixels(false); }); });
+    editMenu->addAction("Cut selected pixels",QKeySequence::Cut,this,[this,copyPixels] {
+        report([&] { copyPixels(false); auto coverage=canvas->selectedCoverage(); edit("Cut selected pixels",[&](auto &d) { Arc::cutSelectedPixels(d,coverage); }); });
     });
-    editMenu->addAction("Copy merged",QKeySequence("Ctrl+Shift+C"),this,[this] {
-        report([&] { auto image=Arc::render(document); if(auto selected=canvas->selectedPath()) {
-            QImage mask(image.size(),QImage::Format_ARGB32_Premultiplied); mask.fill(Qt::transparent);
-            { QPainter p(&mask); p.fillPath(*selected,Qt::white); }
-            { QPainter p(&image); p.setCompositionMode(QPainter::CompositionMode_DestinationIn); p.drawImage(QPoint(),mask); }
-            image=image.copy(selected->boundingRect().toAlignedRect().intersected(image.rect()));
-        } QApplication::clipboard()->setImage(image); });
+    editMenu->addAction("Duplicate selected pixels",QKeySequence("Ctrl+J"),this,[this] {
+        auto coverage=canvas->selectedCoverage(); if(coverage.isNull()) { edit("Duplicate layer",Arc::duplicateLayer); return; }
+        edit("Duplicate selected pixels",[&](auto &d) { Arc::floatSelectedPixels(d,coverage,{},true); });
     });
     editMenu->addAction("Paste image as layer",QKeySequence::Paste,this,[this] {
         auto image=QApplication::clipboard()->image(); if(image.isNull()) return;
@@ -416,6 +436,9 @@ Window::Window() {
     connect(canvas, &Canvas::maskPainted, this, [this](int index, const QImage &mask) {
         edit("Paint layer mask", [&](auto &d) { d.layers[index].mask = mask; });
     });
+    connect(canvas,&Canvas::selectionPixelsMoved,this,[this](QImage coverage,QPointF offset,bool duplicate) {
+        edit(duplicate ? "Duplicate selected pixels" : "Move selected pixels",[&](auto &d) { Arc::floatSelectedPixels(d,coverage,offset,duplicate); });
+    });
     connect(canvas, &Canvas::errorOccurred, this, [this](const QString &message) { QMessageBox::warning(this, "Painting", message); });
     connect(canvas, &Canvas::filesDropped, this, &Window::importImages);
     zoomLabel = new QLabel; statusBar()->addPermanentWidget(zoomLabel);
@@ -580,6 +603,7 @@ void Window::filterDialog(const QString &kind) {
     const QImage source=mask ? original.layers[index].mask : original.layers[index].image;
     if(source.isNull()) return;
     const auto selection=canvas->selectedPath();
+    const auto selectionCoverage=canvas->selectedCoverage();
     Arc::FilterSettings settings=Arc::defaultFilter(kind);
     QDialog dialog(this); dialog.setWindowTitle(kind); dialog.setMinimumWidth(350);
     QFormLayout form(&dialog); QMap<QString,QDoubleSpinBox *> fields;
@@ -632,7 +656,8 @@ void Window::filterDialog(const QString &kind) {
                     settings.curve.append({x,y});
                 }
             }
-            result=Arc::filterLayer(original.layers[index],settings,selection,mask);
+            result=Arc::filterLayer(original.layers[index],settings,selectionCoverage.isNull() ? selection : std::nullopt,mask);
+            if(!selectionCoverage.isNull()) result=Arc::limitToSelection(source,result,mask ? Arc::maskTargetLayer(original.layers[index]) : original.layers[index],selectionCoverage);
             auto shown=original;
             if(preview.isChecked()) { if(mask) shown.layers[index].mask=result; else shown.layers[index].image=result; }
             canvas->setDocument(shown); error.clear(); valid=true;

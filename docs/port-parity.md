@@ -24,8 +24,8 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 ## Selection and geometry
 - [x] Rectangle selection constraining painting
 - [x] Ellipse, freehand/polygonal lasso, magic wand
-- [ ] Add/subtract/invert/feather selections; load image/mask coverage
-- [ ] Move outlines/pixels, duplicate selected pixels, clipboard
+- [x] Add/subtract/invert/feather selections; load image/mask coverage
+- [x] Move outlines/pixels, duplicate selected pixels, clipboard
 - [ ] Transform handles, free distortion, multiple-layer transforms
 - [x] Persistent guides, guide editing/locking/visibility, canvas flips
 - [ ] Snapping (layer movement implemented; resize/shape/selection snapping and rulers remain)

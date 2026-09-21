@@ -23,7 +23,7 @@ Canvas::Canvas(QWidget *parent) : QWidget(parent) {
 }
 void Canvas::setDocument(const Arc::Document &d) {
     cancelGesture();
-    if (document.id != d.id || document.size != d.size) { selection.reset(); cloneAnchor.reset(); cloneOffset.reset(); lastBrushPoint.reset(); }
+    if (document.id != d.id || document.size != d.size) { selection.reset(); selectionMask={}; cloneAnchor.reset(); cloneOffset.reset(); lastBrushPoint.reset(); }
     document = d; refreshImage();
 }
 void Canvas::setTool(Tool value) {
@@ -36,14 +36,55 @@ void Canvas::setMaskTarget(bool enabled) { cancelGesture(); maskTarget = enabled
 void Canvas::setGuidesVisible(bool enabled) { cancelGesture(); guidesVisible=enabled; update(); }
 void Canvas::setGuidesLocked(bool enabled) { cancelGesture(); guidesLocked=enabled; }
 void Canvas::setSnapping(bool enabled) { cancelGesture(); snapping=enabled; }
-void Canvas::clearSelection() { cancelGesture(); selection.reset(); update(); }
-void Canvas::setSelection(const QPainterPath &path) { cancelGesture(); selection=path; update(); }
+void Canvas::clearSelection() { cancelGesture(); selection.reset(); selectionMask={}; update(); }
+void Canvas::setSelection(const QPainterPath &path) { cancelGesture(); selection=path; selectionMask={}; update(); }
+QImage Canvas::selectedCoverage() const {
+    if(!selection) return {};
+    return selectionMask.isNull() ? Arc::pathCoverage(*selection,document.size) : selectionMask;
+}
+void Canvas::setSelectionCoverage(const QImage &mask) {
+    if(mask.size()!=document.size) throw std::runtime_error("Selection dimensions do not match the document.");
+    auto gray=mask.convertToFormat(QImage::Format_Grayscale8);
+    if(gray.isNull()) throw std::runtime_error("Insufficient memory for selection.");
+    auto outline=Arc::coverageOutline(gray);
+    cancelGesture(); selectionMask=gray; selection=outline; update();
+}
+void Canvas::featherSelection(int radius) {
+    if(selection) setSelectionCoverage(Arc::blurImage(selectedCoverage(),radius));
+}
+void Canvas::invertSelection() {
+    auto mask=selectedCoverage(); if(mask.isNull()) { mask=QImage(document.size,QImage::Format_Grayscale8); mask.fill(Qt::black); }
+    mask.invertPixels(); setSelectionCoverage(mask);
+}
+void Canvas::moveSelection(QPointF delta) {
+    selectionOffset=delta;
+    QTransform t; t.translate(delta.x(),delta.y());
+    selection=t.map(*previousSelection);
+    if(!previousSelectionMask.isNull()) {
+        selectionMask=QImage(document.size,QImage::Format_Grayscale8);
+        if(selectionMask.isNull()) throw std::runtime_error("Insufficient memory to move selection.");
+        selectionMask.fill(Qt::black);
+        QPainter p(&selectionMask); p.setRenderHint(QPainter::SmoothPixmapTransform); p.drawImage(delta,previousSelectionMask);
+    }
+    if(movingPixels) { document=dragOriginal; Arc::floatSelectedPixels(document,previousSelectionMask,delta,duplicatePixels); refreshImage(); }
+    update();
+}
 void Canvas::combineSelection(const QPainterPath &path) {
     QPainterPath canvasBounds; canvasBounds.addRect(QRectF(QPointF(),document.size));
     auto combined=path;
     if(previousSelection && selectionOperation==1) combined=previousSelection->united(path);
     if(previousSelection && selectionOperation==2) combined=previousSelection->subtracted(path);
-    selection=combined.intersected(canvasBounds); update();
+    combined=combined.intersected(canvasBounds); QImage coverage;
+    if(previousSelection && !previousSelectionMask.isNull() && selectionOperation!=0) {
+        coverage=Arc::pathCoverage(path,document.size);
+        for(int y=0;y<coverage.height();++y) for(int x=0;x<coverage.width();++x) {
+            int old=previousSelectionMask.constScanLine(y)[x],value=coverage.constScanLine(y)[x];
+            coverage.scanLine(y)[x]=selectionOperation==1 ? std::max(old,value) : old*(255-value)/255;
+        }
+        combined=Arc::coverageOutline(coverage);
+    }
+    selection=combined; selectionMask=coverage;
+    update();
 }
 void Canvas::updateSelection(QPointF point) {
     QPainterPath shape;
@@ -56,7 +97,8 @@ void Canvas::updateSelection(QPointF point) {
         QRectF rectangle=QRectF(selectionStart,end).normalized();
         if(tool==Tool::Ellipse) shape.addEllipse(rectangle); else shape.addRect(rectangle);
     }
-    combineSelection(shape);
+    try { combineSelection(shape); }
+    catch(const std::exception &error) { cancelGesture(); emit errorOccurred(QString::fromUtf8(error.what())); }
 }
 void Canvas::updateStroke(QPointF point) {
     try {
@@ -68,16 +110,21 @@ void Canvas::updateStroke(QPointF point) {
         if (selection) clip = clip.intersected(selection->boundingRect());
         if(tool==Tool::Gradient) {
             QPointF start(strokePath.elementAt(0).x,strokePath.elementAt(0).y);
-            auto result=Arc::gradientStroke(strokeOriginal,start,point,settings,backgroundColor,clip,selection.value_or(QPainterPath()),maskTarget);
+            auto result=Arc::gradientStroke(strokeOriginal,start,point,settings,backgroundColor,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()),maskTarget);
             if(maskTarget) document.layers[dragLayer].mask=result; else document.layers[dragLayer].image=result;
-        } else if(tool==Tool::Clone) document.layers[dragLayer].image=Arc::cloneStroke(strokeOriginal,cloneSample,*cloneOffset,strokePath,settings,clip,selection.value_or(QPainterPath()));
-        else if(tool==Tool::Heal) document.layers[dragLayer].image=Arc::healStroke(strokeOriginal,strokePath,settings,clip,selection.value_or(QPainterPath()));
+        } else if(tool==Tool::Clone) document.layers[dragLayer].image=Arc::cloneStroke(strokeOriginal,cloneSample,*cloneOffset,strokePath,settings,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()));
+        else if(tool==Tool::Heal) document.layers[dragLayer].image=Arc::healStroke(strokeOriginal,strokePath,settings,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()));
         else if(tool==Tool::Blur) {
-            auto result=Arc::blurStroke(strokeOriginal,strokePath,settings,clip,selection.value_or(QPainterPath()),maskTarget);
+            auto result=Arc::blurStroke(strokeOriginal,strokePath,settings,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()),maskTarget);
             if(maskTarget) document.layers[dragLayer].mask=result; else document.layers[dragLayer].image=result;
         }
-        else if (maskTarget) document.layers[dragLayer].mask = Arc::paintMaskStroke(strokeOriginal, strokePath, settings, clip, selection.value_or(QPainterPath()));
-        else document.layers[dragLayer].image = Arc::paintStroke(strokeOriginal, strokePath, settings, clip, selection.value_or(QPainterPath()));
+        else if (maskTarget) document.layers[dragLayer].mask = Arc::paintMaskStroke(strokeOriginal, strokePath, settings, clip, (selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()));
+        else document.layers[dragLayer].image = Arc::paintStroke(strokeOriginal, strokePath, settings, clip, (selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()));
+        if(!selectionMask.isNull()) {
+            auto &result=maskTarget ? document.layers[dragLayer].mask : document.layers[dragLayer].image;
+            result=Arc::limitToSelection(maskTarget ? strokeOriginal.mask : strokeOriginal.image,result,
+                maskTarget ? Arc::maskTargetLayer(strokeOriginal) : strokeOriginal,selectionMask);
+        }
         double radius = settings.diameter/2 + 3;
         QRect region = strokePath.boundingRect().adjusted(-radius,-radius,radius,radius).toAlignedRect()
             .intersected(QRect(QPoint(),document.size));
@@ -195,17 +242,24 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
         cloneAnchor=documentPoint(event->position()); cloneOffset.reset(); return;
     }
     if (tool == Tool::Wand) {
-        previousSelection=selection;
+        previousSelection=selection; previousSelectionMask=selectionMask;
         selectionOperation=(event->modifiers() & Qt::AltModifier) ? 2 : (event->modifiers() & Qt::ShiftModifier) ? 1 : 0;
         try { combineSelection(Arc::wandSelection(composite,documentPoint(event->position()).toPoint(),wandTolerance,true)); }
         catch(const std::exception &error) { emit errorOccurred(QString::fromUtf8(error.what())); }
         previousSelection.reset(); return;
     }
+    if(!selecting && selection && selection->contains(documentPoint(event->position()))
+        && (((tool==Tool::Rectangle || tool==Tool::Ellipse || tool==Tool::Lasso) && event->modifiers()==Qt::NoModifier)
+            || (tool==Tool::Move && !maskTarget && document.active>=0 && !document.layers[document.active].image.isNull()))) {
+        movingSelection=true; movingPixels=tool==Tool::Move; duplicatePixels=event->modifiers() & Qt::AltModifier;
+        previousSelection=selection; previousSelectionMask=movingPixels ? selectedCoverage() : selectionMask;
+        selectionOffset={}; dragOriginal=document; return;
+    }
     if (tool == Tool::Polygon && selecting) {
         selectionGesture.lineTo(documentPoint(event->position())); updateSelection(documentPoint(event->position())); return;
     }
     if (tool == Tool::Rectangle || tool == Tool::Ellipse || tool == Tool::Lasso || tool == Tool::Polygon) {
-        previousSelection = selection;
+        previousSelection = selection; previousSelectionMask=selectionMask;
         selectionOperation=(event->modifiers() & Qt::AltModifier) ? 2 : (event->modifiers() & Qt::ShiftModifier) ? 1 : 0;
         auto point = documentPoint(event->position());
         selectionStart = {std::clamp(std::round(point.x()), 0.0, double(document.size.width())),
@@ -280,6 +334,12 @@ void Canvas::mouseMoveEvent(QMouseEvent *event) {
         auto &g=document.guides[dragGuide]; auto point=documentPoint(event->position());
         g.position=std::clamp(g.axis=="vertical" ? point.x() : point.y(),-1000000.0,1000000.0); update();
     }
+    else if(movingSelection) {
+        auto delta=(event->position()-pressPoint)/zoom;
+        if(event->modifiers() & Qt::ShiftModifier) { if(std::abs(delta.x())>std::abs(delta.y())) delta.setY(0); else delta.setX(0); }
+        try { moveSelection(QPointF(std::round(delta.x()),std::round(delta.y()))); }
+        catch(const std::exception &error) { cancelGesture(); emit errorOccurred(QString::fromUtf8(error.what())); }
+    }
     else if (drafting) updateDraft(documentPoint(event->position()),event->modifiers());
     else if (painting) updateStroke(documentPoint(event->position()));
     else if (selecting) updateSelection(documentPoint(event->position()));
@@ -319,6 +379,13 @@ void Canvas::updateDraft(QPointF point, Qt::KeyboardModifiers modifiers) {
     draftEnd=draftAnchor+delta; update();
 }
 void Canvas::mouseReleaseEvent(QMouseEvent *event) {
+    if(movingSelection && event->button()==Qt::LeftButton) {
+        mouseMoveEvent(event); if(!movingSelection) return;
+        bool pixels=movingPixels,duplicate=duplicatePixels; auto mask=previousSelectionMask; auto delta=selectionOffset;
+        movingSelection=movingPixels=false; previousSelection.reset(); previousSelectionMask={};
+        if(pixels) { document=dragOriginal; refreshImage(); if(!delta.isNull()) emit selectionPixelsMoved(mask,delta,duplicate); }
+        return;
+    }
     if(dragGuide>=0 && event->button()==Qt::LeftButton) {
         auto index=dragGuide; auto &g=document.guides[index]; auto point=documentPoint(event->position());
         double position=std::clamp(g.axis=="vertical" ? point.x() : point.y(),-1000000.0,1000000.0);
@@ -351,8 +418,9 @@ void Canvas::mouseReleaseEvent(QMouseEvent *event) {
     }
     if (selecting && tool != Tool::Polygon && event->button() == Qt::LeftButton) {
         updateSelection(documentPoint(event->position()));
+        if(!selecting) return;
         selecting = false;
-        if (selection->isEmpty()) selection.reset();
+        if (selection->isEmpty()) { selection.reset(); selectionMask={}; }
         previousSelection.reset();
         update();
         return;
@@ -377,6 +445,10 @@ void Canvas::wheelEvent(QWheelEvent *event) {
     offset = event->position() - anchor*zoom; emit zoomChanged(zoom); update(); event->accept();
 }
 void Canvas::cancelGesture() {
+    if(movingSelection) {
+        selection=previousSelection; selectionMask=previousSelectionMask; document=dragOriginal;
+        movingSelection=movingPixels=false; previousSelection.reset(); previousSelectionMask={}; refreshImage();
+    }
     if(dragGuide>=0) { document.guides[dragGuide].position=originalGuidePosition; dragGuide=-1; update(); }
     if(drafting) { drafting=false; update(); }
     if (painting) {
@@ -386,13 +458,16 @@ void Canvas::cancelGesture() {
         strokeOriginal = Arc::Layer(); strokePath = QPainterPath();
         refreshImage();
     }
-    if (selecting) { selection = previousSelection; selecting = false; previousSelection.reset(); update(); }
+    if (selecting) { selectionMask=previousSelectionMask; selection = previousSelection; selecting = false; previousSelection.reset(); update(); }
     if (dragging) { document=dragOriginal; draggingMask=false; dragging = false; dragLayer = -1; refreshImage(); }
     panning = false; unsetCursor();
 }
 void Canvas::keyPressEvent(QKeyEvent *event) {
     if ((event->key()==Qt::Key_Return || event->key()==Qt::Key_Enter) && tool==Tool::Polygon && selecting) {
-        selectionGesture.closeSubpath(); combineSelection(selectionGesture); selecting=false; previousSelection.reset(); event->accept();
+        selectionGesture.closeSubpath();
+        try { combineSelection(selectionGesture); selecting=false; previousSelection.reset(); }
+        catch(const std::exception &error) { cancelGesture(); emit errorOccurred(QString::fromUtf8(error.what())); }
+        event->accept();
     }
     else if (event->key() == Qt::Key_Space) { space = true; setCursor(Qt::OpenHandCursor); event->accept(); }
     else if (event->key() == Qt::Key_Escape) { cancelGesture(); event->accept(); }

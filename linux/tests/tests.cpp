@@ -48,6 +48,53 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void selectionCoverageFeatherAndTransformedEdits() {
+        auto d=sample(); QImage coverage(d.size,QImage::Format_Grayscale8); coverage.fill(QColor(128,128,128));
+        auto changed=d.layers[0].image; changed.fill(Qt::blue);
+        auto mixed=Arc::limitToSelection(d.layers[0].image,changed,d.layers[0],coverage);
+        QCOMPARE(mixed.pixelColor(5,5),QColor(127,0,128));
+        auto translucent=d.layers[0].image; translucent.fill(QColor(0,255,0,64));
+        QCOMPARE(Arc::alphaCoverage(translucent).constScanLine(0)[0],64);
+        QPainterPath shape; shape.addRect(4,4,10,10); coverage=Arc::pathCoverage(shape,d.size);
+        Canvas canvas; canvas.resize(640,480); canvas.setDocument(d); canvas.setSelectionCoverage(coverage); canvas.featherSelection(3);
+        auto soft=canvas.selectedCoverage(); QVERIFY(soft.constScanLine(4)[4]>0 && soft.constScanLine(4)[4]<255); QVERIFY(soft.constScanLine(3)[5]>0);
+        canvas.invertSelection(); QCOMPARE(canvas.selectedCoverage().constScanLine(4)[4],255-soft.constScanLine(4)[4]);
+        auto layer=d.layers[0]; layer.origin={0,0}; layer.size={32,24};
+        auto mapped=Arc::selectionInLayer(layer,layer.image.size(),coverage); QCOMPARE(mapped.size(),layer.image.size());
+        QVERIFY(mapped.constScanLine(3)[3]>0); QCOMPARE(mapped.constScanLine(10)[12],0);
+        auto pixels=Arc::selectedLayerPixels(d,coverage); QCOMPARE(pixels.pixelColor(5,5),QColor(Qt::red)); QCOMPARE(pixels.pixelColor(3,3).alpha(),0);
+        auto original=d; Arc::floatSelectedPixels(d,coverage,{10,0},false); QCOMPARE(d.layers.size(),2);
+        QCOMPARE(d.layers[0].image.pixelColor(3,2).alpha(),0); QCOMPARE(Arc::render(d).pixelColor(15,5),QColor(Qt::red));
+        QCOMPARE(Arc::render(d).pixelColor(5,5).alpha(),0);
+        d=original; Arc::floatSelectedPixels(d,coverage,{10,0},true); QCOMPARE(d.layers[0].image,original.layers[0].image);
+    }
+    void softSelectionPaintingAndCancel() {
+        auto d=sample(); Canvas canvas; canvas.resize(640,480); canvas.show(); canvas.setDocument(d); canvas.fit();
+        QImage coverage(d.size,QImage::Format_Grayscale8); coverage.fill(QColor(128,128,128)); canvas.setSelectionCoverage(coverage);
+        Arc::Brush brush; brush.color=Qt::blue; brush.diameter=6; canvas.setBrush(brush); canvas.setTool(Canvas::Tool::Brush);
+        QSignalSpy painted(&canvas,&Canvas::painted); auto point=[&](QPointF p) { return canvas.canvasToWidget(p).toPoint(); };
+        QTest::mouseClick(&canvas,Qt::LeftButton,Qt::NoModifier,point({6.5,6.5})); QCOMPARE(painted.count(),1);
+        auto image=qvariant_cast<QImage>(painted[0][1]); QCOMPARE(image.pixelColor(4,3),QColor(127,0,128));
+        canvas.setDocument(d); canvas.setTool(Canvas::Tool::Rectangle);
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,point({6,6})); QTest::mouseMove(&canvas,point({10,6}));
+        QTest::keyClick(&canvas,Qt::Key_Escape); QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,point({10,6}));
+        QCOMPARE(canvas.selectedCoverage(),coverage);
+    }
+    void selectedPixelDragUndoAndOutlineMove() {
+        auto d=sample(); QTemporaryDir temp; auto file=temp.filePath("selection-ui.comp"); Arc::saveProject(d,file);
+        Window window; window.show(); window.openProject(file); auto *canvas=window.findChild<Canvas *>(); canvas->fit();
+        QPainterPath selection; selection.addRect(4,4,5,5); canvas->setSelection(selection); canvas->setTool(Canvas::Tool::Rectangle);
+        auto point=[&](QPointF p) { return canvas->canvasToWidget(p).toPoint(); };
+        QTest::mousePress(canvas,Qt::LeftButton,Qt::NoModifier,point({6,6})); QTest::mouseRelease(canvas,Qt::LeftButton,Qt::NoModifier,point({8,6}));
+        QCOMPARE(canvas->selectionBounds()->left(),6.0);
+        canvas->setSelection(selection); canvas->setTool(Canvas::Tool::Move);
+        QTest::mousePress(canvas,Qt::LeftButton,Qt::NoModifier,point({6,6})); QTest::mouseRelease(canvas,Qt::LeftButton,Qt::NoModifier,point({14,6}));
+        QAction *save=nullptr,*undo=nullptr;
+        for(auto *a:window.findChildren<QAction *>()) { if(a->text()=="&Save project") save=a; if(a->shortcut()==QKeySequence::Undo) undo=a; }
+        QVERIFY(save && undo); save->trigger(); auto changed=Arc::loadProject(file); QCOMPARE(changed.layers.size(),2);
+        QCOMPARE(Arc::render(changed).pixelColor(5,5).alpha(),0); QCOMPARE(Arc::render(changed).pixelColor(13,5),QColor(Qt::red));
+        undo->trigger(); save->trigger(); QCOMPARE(Arc::loadProject(file).layers,d.layers);
+    }
     void documentTabsTransferAndIndependentHistory() {
         QTemporaryDir temp; auto first=temp.filePath("first.comp"),second=temp.filePath("second.comp");
         auto d=sample(); Arc::Layer folder; folder.isGroup=true; folder.name="Group"; folder.size=d.size;

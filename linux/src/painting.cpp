@@ -68,7 +68,7 @@ QImage paintMaskStroke(const Layer &original, const QPainterPath &path, const Br
     Layer target = maskTargetLayer(original);
     // Expand compact uniform masks only when edited; preserve nonuniform resolution.
     QImage mask = original.mask;
-    if(mask.size()==QSize(1,1) && (!original.image.isNull() || original.isGroup))
+    if(mask.size()==QSize(1,1))
         mask=mask.scaled(maskEditingSize(original));
     target.image = mask;
     if (target.image.isNull()) throw std::runtime_error("Insufficient memory for mask painting.");

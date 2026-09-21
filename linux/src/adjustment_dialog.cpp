@@ -22,8 +22,7 @@ void Window::adjustmentDialog(QString kind) {
         Arc::Layer layer; layer.name=kind; layer.size=document.size; layer.adjustment=Arc::defaultAdjustment(kind);
         if(document.active>=0) { const auto &active=document.layers[document.active]; layer.parentID=active.isGroup ? active.id : active.parentID; }
         if(auto selection=canvas->selectedPath()) {
-            layer.mask=QImage(document.size,QImage::Format_Grayscale8); layer.mask.fill(Qt::black);
-            QPainter painter(&layer.mask); painter.fillPath(*selection,Qt::white);
+            layer.mask=canvas->selectedCoverage();
         }
         int position=document.active<0 ? working.layers.size() : document.active+1;
         working.layers.insert(position,layer); working.active=position;

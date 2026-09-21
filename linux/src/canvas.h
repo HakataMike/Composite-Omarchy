@@ -17,6 +17,10 @@ public:
     void setSnapping(bool enabled);
     void clearSelection();
     void setSelection(const QPainterPath &path);
+    void setSelectionCoverage(const QImage &coverage);
+    QImage selectedCoverage() const;
+    void featherSelection(int radius);
+    void invertSelection();
     std::optional<QPainterPath> selectedPath() const { return selection; }
     void setBackgroundColor(QColor color) { backgroundColor=color; }
     void setCloneOptions(bool aligned,bool allLayers) { cloneAligned=aligned; cloneAll=allLayers; }
@@ -30,6 +34,7 @@ signals:
     void selected(int index);
     void moved(int index, QPointF origin);
     void maskMoved(int index, QJsonObject placement);
+    void selectionPixelsMoved(QImage coverage,QPointF offset,bool duplicate);
     void guideMoved(int index, double position);
     void filesDropped(QStringList paths);
     void zoomChanged(double zoom);
@@ -76,6 +81,10 @@ private:
     Arc::Layer strokeOriginal;
     QPainterPath strokePath;
     bool painting = false, selecting = false;
+    QImage selectionMask, previousSelectionMask;
+    bool movingSelection=false, movingPixels=false, duplicatePixels=false;
+    QPointF selectionOffset;
+    void moveSelection(QPointF offset);
     bool maskTarget = false;
     std::optional<QPainterPath> selection, previousSelection;
     QPainterPath selectionGesture;
