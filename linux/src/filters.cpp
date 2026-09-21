@@ -11,11 +11,11 @@
 #include <cmath>
 #include <stdexcept>
 extern "C" {
-#include "../../Compositor/Rendering/AdjustPixels.h"
-#include "../../Compositor/Rendering/LevelsPixels.h"
-#include "../../Compositor/Rendering/NoisePixels.h"
-#include "../../Compositor/Rendering/LensPixels.h"
-#include "../../Compositor/Rendering/ContentFill.h"
+#include "kernels/AdjustPixels.h"
+#include "kernels/LevelsPixels.h"
+#include "kernels/NoisePixels.h"
+#include "kernels/LensPixels.h"
+#include "kernels/ContentFill.h"
 }
 namespace Arc {
 QStringList filterNames() { return {"Levels","Curves","Hue/Saturation","Exposure","Gradient Map","Grain","Invert","Gaussian Blur","Motion Blur","Noise","Lens Correction"}; }

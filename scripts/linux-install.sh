@@ -8,7 +8,7 @@ fi
 if [[ -f "$root/linux/compositor.pro" ]]; then
     "$root/scripts/linux-build.sh"
     binary="$root/build/linux/compositor-arc"
-    icon="$root/Compositor/Assets.xcassets/AppIcon.appiconset/app-icon-256.png"
+    icon="$root/linux/packaging/compositor-arc.png"
     desktop="$root/linux/packaging/compositor-arc.desktop"
 else
     binary="$root/bin/compositor-arc"

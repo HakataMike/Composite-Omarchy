@@ -2,7 +2,7 @@
 #include <memory>
 #include <stdexcept>
 extern "C" {
-#include "../../Compositor/Rendering/WandPixels.h"
+#include "kernels/WandPixels.h"
 }
 namespace Arc {
 namespace {

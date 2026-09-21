@@ -5,7 +5,7 @@
 #include <cmath>
 #include <stdexcept>
 extern "C" {
-#include "../../Compositor/Rendering/LevelsPixels.h"
+#include "kernels/LevelsPixels.h"
 }
 namespace Arc {
 namespace {

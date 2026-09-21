@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <cmath>
 extern "C" {
-#include "../../Compositor/Rendering/HealPixels.h"
+#include "kernels/HealPixels.h"
 }
 namespace Arc {
 namespace {

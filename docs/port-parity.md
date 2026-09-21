@@ -1,6 +1,6 @@
 # Linux port parity checklist
 
-Scope: the macOS app in this checkout, including behavior described in README.md and its Swift implementations. A feature is complete only when usable from the Qt UI, preserved where applicable by project save/load, and covered by relevant verification. Similar-looking output alone does not establish parity. The non-AI Linux implementation is complete; the external acceptance items below remain explicitly unverified.
+Scope: the original macOS app used as the port reference, including behavior described in README.md and its Swift implementations. A feature is complete only when usable from the Qt UI, preserved where applicable by project save/load, and covered by relevant verification. Similar-looking output alone does not establish parity. The non-AI Linux implementation is complete; the external acceptance items below remain explicitly unverified.
 
 ## Foundation
 - [x] Native Qt/Wayland editor, import, raster layers, basic transforms, history, PNG/JPEG export

@@ -9,7 +9,7 @@ trap 'rm -rf -- "$staging"' EXIT
 bundle="$staging/$name"
 install -Dm755 "$root/build/linux/compositor-arc" "$bundle/bin/compositor-arc"
 strip "$bundle/bin/compositor-arc"
-install -Dm644 "$root/Compositor/Assets.xcassets/AppIcon.appiconset/app-icon-256.png" "$bundle/share/icons/hicolor/256x256/apps/compositor-arc.png"
+install -Dm644 "$root/linux/packaging/compositor-arc.png" "$bundle/share/icons/hicolor/256x256/apps/compositor-arc.png"
 install -Dm644 "$root/linux/packaging/compositor-arc.desktop" "$bundle/share/applications/compositor-arc.desktop"
 install -Dm755 "$root/scripts/linux-install.sh" "$bundle/scripts/linux-install.sh"
 install -Dm644 "$root/LICENSE" "$bundle/LICENSE"

@@ -1,6 +1,6 @@
 # Compositor ARC for Linux
 
-The `linux/` directory contains the C++17 / Qt 6 Widgets implementation. It runs as a native Wayland application on Omarchy. The original macOS implementation remains in `Compositor/`.
+The `linux/` directory contains the C++17 / Qt 6 Widgets implementation. It runs as a native Wayland application on Omarchy. The required portable C kernels are in `linux/src/kernels/`, and the application icon is in `linux/packaging/`. The original Mac source and build files are no longer tracked; local reference copies are ignored.
 
 The non-AI Linux editing implementation is complete and has passed the automated acceptance suite. Cross-platform comparison limits and remaining human acceptance checks are tracked in [port-parity.md](port-parity.md).
 
@@ -103,7 +103,7 @@ The current checklist is [port-parity.md](port-parity.md). Actual macOS-generate
 
 Automatic background removal and AI object selection are deliberately excluded; use manual selections and masks. Performance work on tiled rendering remains an optimization, not a dependency of the current editor.
 
-The existing Swift/XCTest suite still requires macOS/Xcode. Linux tests do not imply that suite passes.
+The historical Swift/XCTest suite is no longer included in this Linux repository; its results have not been verified.
 
 Adjustment controls: destructive adjustments share the layer-adjustment controls, including selective Hue/Saturation bands, Colorize, and independent RGB/color-channel Levels and Curves. Auto Levels uses the selected channel and weights the selected region. Gaussian Blur uses a three-box approximation calibrated to the requested standard deviation. Gaussian and Motion Blur expand unselected image layers while retaining mask placement; masked or selection-limited filtering keeps the original bounds. Motion Blur uses a uniform directional streak; Core Image uses a tapered profile, so cross-platform output differs.
 

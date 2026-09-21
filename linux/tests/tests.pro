@@ -8,11 +8,11 @@ SOURCES += ../src/painting.cpp
 HEADERS += ../src/painting.h
 SOURCES += ../src/operations.cpp
 HEADERS += ../src/operations.h
-SOURCES += ../src/selection.cpp ../../Compositor/Rendering/WandPixels.c
+SOURCES += ../src/selection.cpp ../src/kernels/WandPixels.c
 HEADERS += ../src/selection.h
-SOURCES += ../src/filters.cpp ../../Compositor/Rendering/AdjustPixels.c ../../Compositor/Rendering/LevelsPixels.c ../../Compositor/Rendering/NoisePixels.c ../../Compositor/Rendering/LensPixels.c ../../Compositor/Rendering/ContentFill.c
+SOURCES += ../src/filters.cpp ../src/kernels/AdjustPixels.c ../src/kernels/LevelsPixels.c ../src/kernels/NoisePixels.c ../src/kernels/LensPixels.c ../src/kernels/ContentFill.c
 HEADERS += ../src/filters.h
-SOURCES += ../src/retouch.cpp ../../Compositor/Rendering/HealPixels.c
+SOURCES += ../src/retouch.cpp ../src/kernels/HealPixels.c
 HEADERS += ../src/retouch.h
 
 SOURCES += ../src/styles.cpp

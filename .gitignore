@@ -22,3 +22,16 @@ xcuserdata/
 # Claude Code settings personal to this machine
 .claude/settings.local.json
 BUILD_PLAN.md
+
+# Original Mac implementation retained locally for reference only
+/Compositor/
+/Compositor.xcodeproj/
+/CompositorTests/
+/CompositorUITests/
+/Config/
+/appcast.xml
+/scripts/ExportOptions.plist
+/scripts/dmg/
+/scripts/publish.sh
+/scripts/release.sh
+/docs/brush-performance.md

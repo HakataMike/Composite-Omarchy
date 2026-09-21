@@ -1,12 +1,14 @@
-# Compositor project format, versions 1–6
+# Compositor project format: legacy versions 1–6
 
-A `.comp` file is a macOS document package containing `manifest.json` and an `images/` directory of `<layer UUID>.png` assets.
+This legacy schema reference describes versions 1–6. The Linux editor supports versions 1–8; see [the Linux guide](linux-port.md#project-compatibility-and-safety) for current behavior.
+
+A `.comp` project is a directory containing `manifest.json` and an `images/` directory of `<layer UUID>.png` assets.
 
 The manifest identifies `com.compositor.project`, version `6` for new saves (versions `1`–`5` remain readable), and the sRGB working space. It stores document UUID, pixel dimensions, active layer UUID, and layers in bottom-to-top order. Each layer stores its UUID, name, visibility, transform (origin, size, clockwise rotation, flips, sampling), and optional image filename. Blank layers have no image asset.
 
 Embedded PNGs preserve source pixels and transparency; transforms remain separate. Projects survive moving or deleting imported source photos. Saving uses a coordinated atomic package replacement. Unsupported versions, invalid metadata, missing assets, unsafe paths, and oversized data are rejected before replacing the live document.
 
-Limits: 30,000 pixels per canvas/image side, 100 million total source pixels, 10,000 layers, 4 MiB manifest, 512 MiB per encoded asset. See `ProjectStore.swift` for validation.
+Limits: 30,000 pixels per canvas/image side, 100 million total source pixels, 10,000 layers, 4 MiB manifest, 512 MiB per encoded asset. See [`document.cpp`](../linux/src/document.cpp) for current validation.
 
 Undo history and viewport are session-only. Opening fits the canvas, restores selection, and starts with clean history. Future editable features must extend the schema and round-trip tests. PNG export is a flattened derivative and does not mark project edits saved.
 
