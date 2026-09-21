@@ -40,6 +40,7 @@ private:
     bool mayDiscard();
     void newProject();
     void resizeDialog(bool resample);
+    void filterDialog(const QString &kind);
     void exportDialog();
     void chooseProject();
 };

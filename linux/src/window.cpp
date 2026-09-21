@@ -1,6 +1,9 @@
 #include "window.h"
 #include "operations.h"
 #include "selection.h"
+#include "filters.h"
+#include <QTimer>
+#include <QPlainTextEdit>
 #include <QApplication>
 #include <QClipboard>
 #include <QInputDialog>
@@ -76,6 +79,14 @@ Window::Window() {
         edit("Flip canvas vertically",[](auto &d) { for (auto &l : d.layers) {
             l.origin.setY(d.size.height()-l.origin.y()-l.size.height()); l.rotation=-l.rotation; l.flipY=!l.flipY;
         }});
+    });
+    auto *filterMenu=menuBar()->addMenu("&Adjust / Filter");
+    for(const auto &name:Arc::filterNames()) filterMenu->addAction(name+"…",this,[this,name] { filterDialog(name); });
+    filterMenu->addSeparator();
+    filterMenu->addAction("Content-aware fill",this,[this] {
+        auto selection=canvas->selectedPath();
+        if(!selection) { statusBar()->showMessage("Select a region to fill first.",5000); return; }
+        editLayer("Content-aware fill",[&](auto &layer) { layer.image=Arc::contentAwareFill(layer,*selection); });
     });
     auto *layerMenu = menuBar()->addMenu("&Layer");
     layerMenu->addAction("Merge down",QKeySequence("Ctrl+E"),this,[this] { edit("Merge down",Arc::mergeDown); });
@@ -397,6 +408,85 @@ void Window::resizeDialog(bool resample) {
         else Arc::resizeCanvas(d,{width.value(),height.value()},centered.isChecked());
     });
     canvas->fit();
+}
+void Window::filterDialog(const QString &kind) {
+    if(document.active<0) { statusBar()->showMessage("Select an image layer first.",5000); return; }
+    const int index=document.active; const bool mask=paintTarget->currentIndex()==1;
+    const auto original=document;
+    const QImage source=mask ? original.layers[index].mask : original.layers[index].image;
+    if(source.isNull()) return;
+    const auto selection=canvas->selectedPath();
+    Arc::FilterSettings settings=Arc::defaultFilter(kind);
+    QDialog dialog(this); dialog.setWindowTitle(kind); dialog.setMinimumWidth(350);
+    QFormLayout form(&dialog); QMap<QString,QDoubleSpinBox *> fields;
+    for(const auto &parameter:Arc::filterParameters(kind)) {
+        auto *field=new QDoubleSpinBox; field->setRange(parameter.minimum,parameter.maximum);
+        field->setDecimals(3); field->setValue(parameter.initial); field->setKeyboardTracking(false);
+        fields[parameter.key]=field; form.addRow(parameter.label,field);
+    }
+    QComboBox *channel=nullptr;
+    if(kind=="Levels" || kind=="Curves") {
+        channel=new QComboBox; channel->addItems({"RGB","Red","Green","Blue"}); form.addRow("Channel",channel);
+    }
+    QPlainTextEdit *curve=nullptr;
+    if(kind=="Curves") {
+        curve=new QPlainTextEdit("0, 0\n128, 128\n255, 255");
+        form.addRow("Curve points (input, output)",curve);
+    }
+    QCheckBox *gaussian=nullptr,*monochromatic=nullptr;
+    if(kind=="Noise") {
+        gaussian=new QCheckBox("Gaussian distribution"); monochromatic=new QCheckBox("Monochromatic");
+        form.addRow(gaussian); form.addRow(monochromatic);
+    }
+    QTimer timer; timer.setSingleShot(true); timer.setInterval(100);
+    auto schedule=[&] { timer.start(); };
+    if(kind=="Gradient Map") {
+        auto *dark=new QPushButton("Choose shadow color"),*light=new QPushButton("Choose highlight color");
+        form.addRow(dark,light);
+        connect(dark,&QPushButton::clicked,&dialog,[&] { auto c=QColorDialog::getColor(settings.shadows,&dialog); if(c.isValid()) { settings.shadows=c; schedule(); } });
+        connect(light,&QPushButton::clicked,&dialog,[&] { auto c=QColorDialog::getColor(settings.highlights,&dialog); if(c.isValid()) { settings.highlights=c; schedule(); } });
+    }
+    if(kind=="Levels") {
+        auto *automatic=new QPushButton("Auto levels"); form.addRow(automatic);
+        connect(automatic,&QPushButton::clicked,&dialog,[&] { report([&] { auto range=Arc::autoLevels(source); fields["black"]->setValue(range.first); fields["white"]->setValue(range.second); }); });
+    }
+    QCheckBox preview("Live preview"); preview.setChecked(true); form.addRow(&preview);
+    QLabel error; error.setWordWrap(true); form.addRow(&error);
+    QDialogButtonBox buttons(QDialogButtonBox::Ok|QDialogButtonBox::Cancel); form.addRow(&buttons);
+    QImage result; bool valid=false;
+    auto update=[&] {
+        try {
+            for(auto i=fields.begin();i!=fields.end();++i) settings.values[i.key()]=i.value()->value();
+            if(channel) settings.channel=channel->currentIndex();
+            if(gaussian) { settings.values["gaussian"]=gaussian->isChecked(); settings.values["monochromatic"]=monochromatic->isChecked(); }
+            if(curve) {
+                settings.curve.clear();
+                for(auto line:curve->toPlainText().split('\n',Qt::SkipEmptyParts)) {
+                    auto values=line.split(','); bool xok=false,yok=false;
+                    double x=values.value(0).trimmed().toDouble(&xok),y=values.value(1).trimmed().toDouble(&yok);
+                    if(values.size()!=2 || !xok || !yok) throw std::runtime_error("Enter one input, output pair per line.");
+                    settings.curve.append({x,y});
+                }
+            }
+            result=Arc::filterLayer(original.layers[index],settings,selection,mask);
+            auto shown=original;
+            if(preview.isChecked()) { if(mask) shown.layers[index].mask=result; else shown.layers[index].image=result; }
+            canvas->setDocument(shown); error.clear(); valid=true;
+        } catch(const std::exception &e) { error.setText(QString::fromUtf8(e.what())); valid=false; canvas->setDocument(original); }
+        buttons.button(QDialogButtonBox::Ok)->setEnabled(valid);
+    };
+    connect(&timer,&QTimer::timeout,&dialog,update);
+    for(auto *field:fields) connect(field,&QDoubleSpinBox::valueChanged,&dialog,schedule);
+    if(channel) connect(channel,&QComboBox::currentIndexChanged,&dialog,schedule);
+    if(curve) connect(curve,&QPlainTextEdit::textChanged,&dialog,schedule);
+    if(gaussian) { connect(gaussian,&QCheckBox::toggled,&dialog,schedule); connect(monochromatic,&QCheckBox::toggled,&dialog,schedule); }
+    connect(&preview,&QCheckBox::toggled,&dialog,schedule);
+    connect(&buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
+    connect(&buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+    timer.start(0); int accepted=dialog.exec(); timer.stop();
+    if(accepted==QDialog::Accepted) update();
+    canvas->setDocument(original);
+    if(accepted==QDialog::Accepted && valid) edit(kind,[&](auto &d) { if(mask) d.layers[index].mask=result; else d.layers[index].image=result; });
 }
 void Window::exportDialog() {
     auto path = QFileDialog::getSaveFileName(this, "Export image (JPEG uses a white background)", "Untitled.png", "PNG (*.png);;JPEG (*.jpg *.jpeg)");

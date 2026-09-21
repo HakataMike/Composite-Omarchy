@@ -36,6 +36,8 @@ Qt selects its platform from the desktop environment. If needed, force native Wa
 - Add, disable, or remove a layer mask. Choose **Paint image** or **Paint mask**; black hides and white reveals. Color buttons provide black/white presets; other colors become grayscale coverage. The eraser restores white on masks. Masks follow layer transforms and apply to exports. Mask painting requires an enabled mask.
 - Each stroke is one undo step. Stroke opacity is applied once across the entire stroke, including self-overlaps. Escape, focus loss, or changing tools cancels an unfinished stroke.
 - Rectangle (`M`), ellipse, freehand lasso (`L`), polygonal lasso, and magic wand (`W`) selections constrain painting and erasing in document coordinates. Drag to select; click polygon vertices and press Enter or double-click to finish. Shift adds, Alt subtracts. Wand samples the visible composite with adjustable tolerance. Use Select → Deselect (`Ctrl+D`). Escape cancels a selection drag and restores the previous selection. Selections are session-only and clear when opening a different document or changing canvas size.
+- Adjust / Filter menu: selection-limited live previews for Levels (with Auto), Curves, Hue/Saturation, Exposure, Gradient Map, Grain, Invert, Gaussian Blur, Noise, and Lens Correction. Cancel restores the original image; Apply creates one undo step. Curves currently uses editable input/output pairs rather than draggable handles.
+- Content-aware fill uses the original C implementation on the selected image region.
 - Image menu: canvas size, image resampling/resolution, crop to selection bounds, and canvas flips. Image resampling bakes each layer transform into new source pixels.
 - Layer menu: Merge Down for Normal-blend layers; mask reveal/hide all, invert, and feather/blur. Feather uses a three-pass box approximation of a Gaussian.
 - Select All, Invert Selection, Select Layer Pixels (nonzero alpha outline), Copy Merged, and Paste Image as Layer.
@@ -69,7 +71,7 @@ The loader validates IDs, transforms, sizes, filenames, asset containment, and c
 
 Rendering currently uses QPainter on the CPU and caches a full-resolution composite for display. Paint previews redraw the affected region for pixel-aligned layers and restrict brush coverage allocation to the stroke bounds. Transformed layers fall back to a full redraw to avoid Qt interpolation differences. Other layer changes still rebuild the composite synchronously. Large projects need a later tiled/dirty-region renderer and background processing. Qt's smooth image interpolation also does not yet reproduce the macOS high-quality downsampler exactly.
 
-The upstream C pixel routines remain available. The basic brush uses Qt rasterization; advanced selection and retouching tools have not yet been connected. Painting is clipped to the canvas and the layer's existing source image bounds. Use a canvas-sized paint layer to paint outside an imported image. Pressure and feathered selection coverage are not implemented yet.
+The original C wand, levels, gradient-map, grain, noise, lens-correction, and content-fill kernels are used by the Qt build. The basic brush uses Qt rasterization; healing and clone-stamp tools remain to be connected. Painting is clipped to the canvas and the layer's existing source image bounds. Use a canvas-sized paint layer to paint outside an imported image. Pressure and feathered selection coverage are not implemented yet.
 
 A local synthetic sample uses a 3840×2160 document with four full-size raster layers and a soft mask stroke. The original full preview averaged about 71 ms. Regional redraw and smaller brush scratch buffers reduced this to about **13 ms** (three samples, excluding UI presentation). Transformed layers still take the full redraw path. This is not a general benchmark: longer strokes, different masks, and larger documents can be slower.
 
@@ -82,3 +84,5 @@ A local synthetic sample uses a 3840×2160 document with four full-size raster l
 5. Broader macOS fixture compatibility, desktop packaging, and release automation.
 
 The existing Swift/XCTest suite still requires macOS/Xcode. Linux tests do not imply that suite passes.
+
+Adjustment limitations: Hue/Saturation currently affects the full color range; selective color bands and Colorize remain. Levels Auto currently samples the whole source. Gaussian Blur uses a three-box approximation and does not expand layer bounds yet. Adjustment layers and the full Curves graphical editor remain separate parity work.

@@ -1,6 +1,7 @@
 #include "../src/document.h"
 #include "../src/operations.h"
 #include "../src/selection.h"
+#include "../src/filters.h"
 #include "../src/canvas.h"
 #include "../src/window.h"
 #include <QtTest>
@@ -399,6 +400,48 @@ private slots:
         QTest::mouseClick(&canvas,Qt::LeftButton,Qt::NoModifier,point({10,1}));
         QTest::mouseClick(&canvas,Qt::LeftButton,Qt::NoModifier,point({1,10})); QTest::keyClick(&canvas,Qt::Key_Return);
         QVERIFY(canvas.selectedPath()->contains(QPointF(3,3))); QVERIFY(!canvas.selectedPath()->contains(QPointF(9,9)));
+    }
+    void adjustmentKernelsAndSelection() {
+        QImage image(2,1,QImage::Format_ARGB32_Premultiplied); image.setPixelColor(0,0,QColor(64,64,64)); image.setPixelColor(1,0,QColor(192,192,192));
+        auto levels=Arc::defaultFilter("Levels"); levels.values["black"]=64; levels.values["white"]=192;
+        auto output=Arc::applyFilter(image,levels); QCOMPARE(output.pixelColor(0,0),QColor(Qt::black)); QCOMPARE(output.pixelColor(1,0),QColor(Qt::white));
+        auto exposure=Arc::defaultFilter("Exposure"); exposure.values["exposure"]=1;
+        image.fill(QColor(128,128,128)); output=Arc::applyFilter(image,exposure); QVERIFY(std::abs(output.pixelColor(0,0).red()-176)<=1);
+        auto curve=Arc::defaultFilter("Curves"); curve.curve={{0,255},{255,0}};
+        QCOMPARE(Arc::applyFilter(image,curve).pixelColor(0,0).red(),127);
+        curve.curve={{0,0},{0,255}}; QVERIFY_THROWS_EXCEPTION(std::runtime_error,Arc::applyFilter(image,curve));
+        image.fill(Qt::red); auto hue=Arc::defaultFilter("Hue/Saturation"); hue.values["hue"]=120;
+        QCOMPARE(Arc::applyFilter(image,hue).pixelColor(0,0),QColor(Qt::green));
+        auto noise=Arc::defaultFilter("Noise"); QCOMPARE(Arc::applyFilter(image,noise),Arc::applyFilter(image,noise));
+        auto lens=Arc::defaultFilter("Lens Correction"); QCOMPARE(Arc::applyFilter(image,lens),image);
+        auto d=sample(); auto &layer=d.layers[0]; QPainterPath selected; selected.addRect(QRectF(2,3,5,5));
+        auto invert=Arc::defaultFilter("Invert"); output=Arc::filterLayer(layer,invert,selected,false);
+        QCOMPARE(output.pixelColor(1,1),QColor(Qt::cyan)); QCOMPARE(output.pixelColor(10,8),QColor(Qt::red));
+        layer.mask=QImage(1,1,QImage::Format_Grayscale8); layer.mask.fill(Qt::white);
+        output=Arc::filterLayer(layer,invert,selected,true);
+        QCOMPARE(output.size(),layer.image.size()); QCOMPARE(output.constScanLine(1)[1],uchar(0)); QCOMPARE(output.constScanLine(8)[10],uchar(255));
+        layer.image.fill(QColor(80,120,160)); output=Arc::contentAwareFill(layer,selected);
+        QCOMPARE(output.pixelColor(1,1),QColor(80,120,160));
+    }
+    void filterPreviewCancelAndUndo() {
+        QTemporaryDir temp; QVERIFY(sample().layers[0].image.save(temp.filePath("red.png")));
+        Window window; window.show(); QVERIFY(QTest::qWaitForWindowExposed(&window)); window.importImages({temp.filePath("red.png")});
+        auto *canvas=window.findChild<Canvas *>(); auto point=canvas->canvasToWidget({8,6}).toPoint();
+        QAction *invert=nullptr,*undo=nullptr;
+        for(auto *action:window.findChildren<QAction *>()) {
+            if(action->text()=="Invert…") invert=action;
+            if(action->shortcut()==QKeySequence::Undo) undo=action;
+        }
+        QVERIFY(invert); QVERIFY(undo); bool sawPreview=false;
+        QTimer::singleShot(150,[&] {
+            auto *dialog=qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            if(dialog) { sawPreview=canvas->grab().toImage().pixelColor(point)==QColor(Qt::cyan); dialog->reject(); }
+        });
+        invert->trigger(); QVERIFY(sawPreview); QCOMPARE(canvas->grab().toImage().pixelColor(point),QColor(Qt::red));
+        QTimer::singleShot(150,[&] { if(auto *dialog=qobject_cast<QDialog *>(QApplication::activeModalWidget())) dialog->accept(); });
+        invert->trigger(); QCOMPARE(canvas->grab().toImage().pixelColor(point),QColor(Qt::cyan));
+        undo->trigger(); QCOMPARE(canvas->grab().toImage().pixelColor(point),QColor(Qt::red));
+        undo->trigger(); QVERIFY(!window.isWindowModified());
     }
     void windowUndoAndLayerControls() {
         QTemporaryDir temp; auto image = sample().layers[0].image; QVERIFY(image.save(temp.filePath("red.png")));
