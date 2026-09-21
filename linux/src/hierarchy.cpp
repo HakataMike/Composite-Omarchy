@@ -1,5 +1,6 @@
 #include "hierarchy.h"
 #include "styles.h"
+#include "clipping.h"
 #include <QHash>
 #include <QSet>
 #include <cmath>
@@ -136,12 +137,16 @@ void mergeFolder(Document &d) {
     if(extent.isEmpty() || extent.width()>30000 || extent.height()>30000 || std::abs(extent.x())>1000000 || std::abs(extent.y())>1000000)
         throw std::runtime_error("Folder is empty or exceeds the supported raster bounds.");
     auto bounds=extent.toAlignedRect();
+    QSet<QUuid> members{folder.id}; for(int i:children) members.insert(d.layers[i].id);
+    auto working=d;
+    for(int i:children) if(!working.layers[i].maskSourceID.isNull() && !members.contains(working.layers[i].maskSourceID)) bakeClippingMask(working,i);
     Document subtree=d; subtree.layers.clear(); subtree.size=bounds.size(); subtree.active=0;
     auto root=folder; root.parentID={}; root.visible=true; subtree.layers.append(root);
-    for(int i:children) subtree.layers.append(d.layers[i]);
+    for(int i:children) subtree.layers.append(working.layers[i]);
     for(auto &l:subtree.layers) l.origin-=bounds.topLeft();
     Layer merged; merged.visible=folder.visible; merged.id=folder.id; merged.name=folder.name; merged.parentID=folder.parentID;
     merged.image=render(subtree); merged.size=bounds.size(); merged.origin=bounds.topLeft();
+    bakeClippingDependents(d,members);
     d.layers[d.active]=merged;
     std::sort(children.begin(),children.end(),std::greater<int>());
     for(int i:children) d.layers.removeAt(i);
@@ -156,6 +161,7 @@ void duplicateLayer(Document &d) {
     QVector<Layer> copies;
     for(int i:selected) {
         auto copy=d.layers[i]; copy.id=replacements[copy.id];
+        if(replacements.contains(copy.maskSourceID)) copy.maskSourceID=replacements[copy.maskSourceID];
         if(replacements.contains(copy.parentID)) copy.parentID=replacements[copy.parentID];
         if(i==d.active) copy.name+=" copy";
         copies.append(copy);
@@ -167,6 +173,8 @@ void duplicateLayer(Document &d) {
 void deleteLayer(Document &d) {
     if(d.active<0) return;
     auto remove=descendants(d,d.layers[d.active].id); remove.append(d.active);
+    QSet<QUuid> removed; for(int i:remove) removed.insert(d.layers[i].id);
+    bakeClippingDependents(d,removed);
     std::sort(remove.begin(),remove.end(),std::greater<int>());
     for(int i:remove) d.layers.removeAt(i);
     d.active=std::min(d.active,int(d.layers.size())-1); validate(d);

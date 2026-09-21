@@ -1,6 +1,7 @@
 #include "blending.h"
 #include <algorithm>
 #include <array>
+#include <QHash>
 #include <cmath>
 #include <stdexcept>
 
@@ -31,6 +32,21 @@ int modeIndex(const QString &mode) {
     if(mode=="Luminosity") return 3;
     return -1;
 }
+}
+QPainter::CompositionMode painterBlendMode(const QString &mode) {
+    static const QHash<QString,QPainter::CompositionMode> modes{
+        {"Normal",QPainter::CompositionMode_SourceOver},{"Multiply",QPainter::CompositionMode_Multiply},
+        {"Screen",QPainter::CompositionMode_Screen},{"Overlay",QPainter::CompositionMode_Overlay},
+        {"Darken",QPainter::CompositionMode_Darken},{"Lighten",QPainter::CompositionMode_Lighten},
+        {"Difference",QPainter::CompositionMode_Difference},{"Color Dodge",QPainter::CompositionMode_ColorDodge},
+        {"Color Burn",QPainter::CompositionMode_ColorBurn},{"Soft Light",QPainter::CompositionMode_SoftLight}
+    };
+    if(!modes.contains(mode)) throw std::runtime_error("Unsupported painter blend mode.");
+    return modes[mode];
+}
+void compositeImages(QImage &backdrop, const QImage &source, const QString &mode) {
+    if(isNonseparableBlend(mode)) blendNonseparable(backdrop,source,mode);
+    else { QPainter p(&backdrop); p.setCompositionMode(painterBlendMode(mode)); p.drawImage(QPoint(),source); }
 }
 bool isNonseparableBlend(const QString &mode) { return modeIndex(mode)>=0; }
 void blendNonseparable(QImage &backdrop, const QImage &source, const QString &mode) {

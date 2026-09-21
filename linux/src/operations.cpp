@@ -1,5 +1,6 @@
 #include "operations.h"
 #include "styles.h"
+#include "clipping.h"
 #include <QColorSpace>
 #include <cmath>
 #include <algorithm>
@@ -107,9 +108,12 @@ void mergeDown(Document &d) {
     QRectF extent = d.layers[top].transform().mapRect(QRectF(QPointF(),d.layers[top].size))
         .united(d.layers[bottom].transform().mapRect(QRectF(QPointF(),d.layers[bottom].size)));
     QRect bounds = extent.toAlignedRect(); checkSize(bounds.size());
-    Document pair = d; pair.layers = {d.layers[bottom],d.layers[top]}; pair.active = 1; pair.size = bounds.size();
+    auto working=d; QSet<QUuid> removed{d.layers[bottom].id,d.layers[top].id};
+    for(int i:{bottom,top}) if(!working.layers[i].maskSourceID.isNull() && !removed.contains(working.layers[i].maskSourceID)) bakeClippingMask(working,i);
+    Document pair = d; pair.layers = {working.layers[bottom],working.layers[top]}; pair.active = 1; pair.size = bounds.size();
     for (auto &layer : pair.layers) { layer.origin -= bounds.topLeft(); layer.parentID={}; }
     Layer merged; merged.parentID=d.layers[top].parentID; merged.name = d.layers[top].name; merged.image = render(pair); merged.size = bounds.size(); merged.origin = bounds.topLeft();
+    bakeClippingDependents(d,removed);
     d.layers[bottom] = merged; d.layers.removeAt(top); d.active = bottom; validate(d);
 }
 QImage blurImage(const QImage &image, int radius) {

@@ -10,7 +10,7 @@ constexpr qint64 MaxPixels = 100000000;
 struct Layer {
     QUuid id = QUuid::createUuid();
     QString name;
-    QUuid parentID;
+    QUuid parentID, maskSourceID;
     bool isGroup = false;
     QImage image;
     QJsonObject shape, text; // Editable source; image remains the portable raster fallback.

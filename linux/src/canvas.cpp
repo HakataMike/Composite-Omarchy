@@ -229,7 +229,7 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
             if(!cloneAligned || !cloneOffset) cloneOffset=*cloneAnchor-documentPoint(event->position());
             try {
             if(cloneAll) cloneSample=composite;
-            else { auto single=document; single.layers={document.layers[index]}; single.active=0; single.layers[0].parentID={}; single.layers[0].opacity=1; single.layers[0].blend="Normal"; single.layers[0].maskEnabled=false; cloneSample=Arc::render(single); }
+            else { auto single=document; single.layers={document.layers[index]}; single.active=0; single.layers[0].parentID={}; single.layers[0].maskSourceID={}; single.layers[0].opacity=1; single.layers[0].blend="Normal"; single.layers[0].maskEnabled=false; cloneSample=Arc::render(single); }
             } catch(const std::exception &error) { cloneSample=QImage(); emit errorOccurred(QString::fromUtf8(error.what())); return; }
         }
         dragLayer = index;

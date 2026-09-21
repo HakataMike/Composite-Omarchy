@@ -16,6 +16,7 @@
 #include <QListWidget>
 #include <QTreeWidget>
 #include "../src/hierarchy.h"
+#include "../src/clipping.h"
 #include <QDoubleSpinBox>
 #include <QAction>
 #include <QMessageBox>
@@ -41,6 +42,44 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void clippingStacksAndDependencies() {
+        auto d=sample(); d.layers[0].opacity=0.5;
+        auto top=d.layers[0]; top.id=QUuid::createUuid(); top.opacity=1; top.image.fill(Qt::blue);
+        d.layers.append(top); d.active=1; Arc::createClippingMask(d);
+        QCOMPARE(d.layers[1].maskSourceID,d.layers[0].id);
+        QCOMPARE(Arc::render(d).pixelColor(5,5),QColor(0,0,255,127));
+        d.layers[0].visible=false;
+        QCOMPARE(Arc::render(d).pixelColor(5,5),QColor(0,0,255,127));
+        auto invalid=d; invalid.layers[0].maskSourceID=invalid.layers[1].id;
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error,Arc::validate(invalid));
+        invalid=d; invalid.layers[1].maskSourceID=QUuid::createUuid();
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error,Arc::validate(invalid));
+        d.layers[0].visible=true; d.layers[0].opacity=1;
+        Arc::Layer folder; folder.isGroup=true; folder.name="Folder"; folder.size=d.size;
+        folder.mask=QImage(1,1,QImage::Format_Grayscale8); folder.mask.fill(QColor(128,128,128));
+        for(auto &l:d.layers) l.parentID=folder.id;
+        d.layers.append(folder);
+        QCOMPARE(Arc::render(d).pixelColor(5,5),QColor(0,0,255,128));
+        QTemporaryDir temp; auto file=temp.filePath("clip.comp"); Arc::saveProject(d,file);
+        auto loaded=Arc::loadProject(file); QCOMPARE(loaded.layers,d.layers); QCOMPARE(Arc::render(loaded),Arc::render(d));
+        auto before=Arc::render(d); d.active=2; Arc::mergeFolder(d); QCOMPARE(Arc::render(d),before);
+    }
+    void clippingDeletionAndBaking() {
+        auto d=sample(); d.layers[0].opacity=0.5;
+        auto top=d.layers[0]; top.id=QUuid::createUuid(); top.opacity=1; top.image.fill(Qt::blue);
+        d.layers.append(top); d.active=1; Arc::createClippingMask(d);
+        auto expected=Arc::render(d);
+        d.active=0; Arc::deleteLayer(d);
+        QCOMPARE(d.layers.size(),1); QVERIFY(d.layers[0].maskSourceID.isNull());
+        QCOMPARE(Arc::render(d),expected);
+        d=sample(); d.layers[0].origin={-10,-10}; d.layers[0].opacity=0.5;
+        top=d.layers[0]; top.id=QUuid::createUuid(); top.opacity=1; top.image.fill(Qt::blue);
+        d.layers.append(top); d.active=1; Arc::createClippingMask(d);
+        Arc::bakeClippingMask(d,1); QCOMPARE(d.layers[1].image.pixelColor(0,0),QColor(0,0,255,127));
+        d=sample(); top=d.layers[0]; top.id=QUuid::createUuid(); top.image.fill(Qt::green);
+        d.layers.append(top); d.active=1; Arc::createClippingMask(d);
+        expected=Arc::render(d); Arc::mergeDown(d); QCOMPARE(Arc::render(d),expected);
+    }
     void folderRenderingAndRoundTrip() {
         auto d=sample();
         Arc::Layer folder; folder.isGroup=true; folder.name="Folder"; folder.size=d.size; folder.opacity=0.5;

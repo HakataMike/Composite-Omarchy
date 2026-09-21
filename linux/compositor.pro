@@ -23,3 +23,5 @@ HEADERS += src/blending.h
 SOURCES += src/hierarchy.cpp
 HEADERS += src/hierarchy.h
 HEADERS += src/layer_tree.h
+SOURCES += src/clipping.cpp
+HEADERS += src/clipping.h

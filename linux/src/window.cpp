@@ -4,6 +4,7 @@
 #include "filters.h"
 #include "styles.h"
 #include "hierarchy.h"
+#include "clipping.h"
 #include "layer_tree.h"
 #include <QStyle>
 #include <QJsonArray>
@@ -117,6 +118,9 @@ Window::Window() {
     });
     layerMenu->addAction("Edit shape…",this,&Window::shapeDialog);
     layerMenu->addAction("Edit text…",this,[this] { textDialog({},Qt::black,true); });
+    layerMenu->addAction("Create clipping mask",QKeySequence("Ctrl+Alt+G"),this,[this] { edit("Create clipping mask",Arc::createClippingMask); });
+    layerMenu->addAction("Release clipping mask",this,[this] { edit("Release clipping mask",Arc::releaseClippingMask); });
+    layerMenu->addAction("Bake clipping mask",this,[this] { edit("Bake clipping mask",[](auto &d) { if(d.active>=0) Arc::bakeClippingMask(d,d.active); }); });
     layerMenu->addAction("Merge down",QKeySequence("Ctrl+E"),this,[this] { edit("Merge down",Arc::mergeDown); });
     auto *maskMenu = layerMenu->addMenu("Mask");
     auto maskFill = [this](int value) {
@@ -339,8 +343,8 @@ Window::Window() {
         document.active=item ? item->data(0,Qt::UserRole).toInt() : -1;
         refresh();
     });
-    connect(layers, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem *item) {
-        if(refreshing) return;
+    connect(layers, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem *item, int column) {
+        if(refreshing || column!=0) return;
         int index=item->data(0,Qt::UserRole).toInt();
         QString name=item->text(0); bool visible=item->checkState(0)==Qt::Checked;
         edit("Layer properties",[=](auto &d) { d.layers[index].name=name; d.layers[index].visible=visible; });
@@ -409,7 +413,9 @@ void Window::refresh() {
     for(int i:Arc::layerOrder(document,true)) {
         const auto &l=document.layers[i];
         auto *item=l.parentID.isNull() ? new QTreeWidgetItem(layers) : new QTreeWidgetItem(items[l.parentID]);
-        item->setText(0,l.name); item->setData(0,Qt::UserRole,i); item->setData(0,Qt::UserRole+1,l.id);
+        item->setText(0,l.name); item->setText(1,l.maskSourceID.isNull() ? "" : "↳");
+        if(!l.maskSourceID.isNull()) for(const auto &source:document.layers) if(source.id==l.maskSourceID)
+            item->setToolTip(1,"Clipped to "+source.name); item->setData(0,Qt::UserRole,i); item->setData(0,Qt::UserRole+1,l.id);
         auto flags=item->flags()|Qt::ItemIsEditable|Qt::ItemIsUserCheckable;
         if(!l.isGroup) flags &= ~Qt::ItemIsDropEnabled;
         item->setFlags(flags); item->setCheckState(0,l.visible ? Qt::Checked : Qt::Unchecked);
