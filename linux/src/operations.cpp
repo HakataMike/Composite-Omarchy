@@ -3,6 +3,8 @@
 #include "clipping.h"
 #include "masks.h"
 #include "effects.h"
+#include "hierarchy.h"
+#include "geometry.h"
 #include <QColorSpace>
 #include <cmath>
 #include <algorithm>
@@ -108,19 +110,44 @@ void mergeDown(Document &d) {
     while(bottom>=0 && d.layers[bottom].parentID!=d.layers[top].parentID) --bottom;
     if(bottom<0 || d.layers[top].isGroup || d.layers[bottom].isGroup)
         throw std::runtime_error("Merge Down needs two raster siblings. Use Merge Folder for a folder.");
-    if (d.layers[top].blend != "Normal" || d.layers[bottom].blend != "Normal")
-        throw std::runtime_error("Set both layers to Normal before merging. Other modes depend on the layers below them.");
-    QRectF extent = visualBounds(d.layers[top])
-        .united(visualBounds(d.layers[bottom]));
-    QRect bounds = extent.toAlignedRect(); checkSize(bounds.size());
-    auto working=d; QSet<QUuid> removed{d.layers[bottom].id,d.layers[top].id};
-    for(int i:{bottom,top}) if(!working.layers[i].maskSourceID.isNull() && !removed.contains(working.layers[i].maskSourceID)) bakeClippingMask(working,i);
-    Document pair = d; pair.layers = {working.layers[bottom],working.layers[top]}; pair.active = 1; pair.size = bounds.size();
-    for (auto &layer : pair.layers) { layer.origin -= bounds.topLeft(); offsetMask(layer,-bounds.topLeft()); layer.parentID={}; }
-    Layer merged; merged.parentID=d.layers[top].parentID; merged.name = d.layers[top].name; merged.image = render(pair); merged.size = bounds.size(); merged.origin = bounds.topLeft();
-    bakeClippingDependents(d,removed);
-    d.layers[bottom] = merged; d.layers.removeAt(top); d.active = bottom; validate(d);
+    mergeSelected(d,{d.layers[bottom].id,d.layers[top].id});
 }
+void mergeSelected(Document &d,const QVector<QUuid> &selected) {
+    auto roots=selectedRoots(d,selected); if(roots.isEmpty()) return;
+    QSet<QUuid> removed; int anchor=-1;
+    for(int i=0;i<d.layers.size();++i) if(roots.contains(d.layers[i].id)) {
+        removed.insert(d.layers[i].id); anchor=i; for(int child:descendants(d,d.layers[i].id)) removed.insert(d.layers[child].id);
+    }
+    auto parent=d.layers[anchor].parentID;
+    auto working=d; QRectF extent;
+    for(int i=0;i<working.layers.size();++i) if(removed.contains(working.layers[i].id)) {
+        if(!working.layers[i].isGroup) extent=extent.united(visualBounds(working.layers[i]));
+        if(!working.layers[i].maskSourceID.isNull() && !removed.contains(working.layers[i].maskSourceID)) bakeClippingMask(working,i);
+    }
+    if(extent.isEmpty() || extent.width()>30000 || extent.height()>30000) throw std::runtime_error("Merged layers exceed supported raster dimensions.");
+    auto bounds=extent.toAlignedRect(); checkSize(bounds.size());
+    Document subset=d; subset.size=bounds.size(); subset.layers.clear(); subset.active=-1;
+    for(auto layer:working.layers) if(removed.contains(layer.id)) {
+        if(!removed.contains(layer.parentID)) layer.parentID={};
+        layer.origin-=bounds.topLeft(); offsetMask(layer,-bounds.topLeft()); subset.layers.append(layer);
+    }
+    auto pixels=render(subset); int left=pixels.width(),right=-1,top=pixels.height(),bottom=-1;
+    for(int y=0;y<pixels.height();++y) {
+        const auto *row=reinterpret_cast<const QRgb *>(pixels.constScanLine(y));
+        for(int x=0;x<pixels.width();++x) if(qAlpha(row[x])) { left=std::min(left,x); right=std::max(right,x); top=std::min(top,y); bottom=std::max(bottom,y); }
+    }
+    QRect crop=right<left ? QRect(0,0,1,1) : QRect(QPoint(left,top),QPoint(right,bottom));
+    Layer merged; merged.name=d.layers[anchor].name; merged.parentID=parent;
+    merged.image=pixels.copy(crop); merged.origin=bounds.topLeft()+crop.topLeft(); merged.size=crop.size();
+    bakeClippingDependents(d,removed);
+    QVector<Layer> next; int insertion=0;
+    for(int i=0;i<d.layers.size();++i) {
+        if(!removed.contains(d.layers[i].id)) next.append(d.layers[i]);
+        if(i==anchor) insertion=next.size();
+    }
+    next.insert(insertion,merged); d.layers=next; d.active=insertion; validate(d);
+}
+
 QImage blurImage(const QImage &image, int radius) {
     if (radius < 0 || radius > 250) throw std::runtime_error("Blur radius must be between 0 and 250.");
     if (radius == 0 || image.isNull()) return image;

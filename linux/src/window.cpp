@@ -132,7 +132,14 @@ Window::Window() {
     layerMenu->addAction("Create clipping mask",QKeySequence("Ctrl+Alt+G"),this,[this] { edit("Create clipping mask",Arc::createClippingMask); });
     layerMenu->addAction("Release clipping mask",this,[this] { edit("Release clipping mask",Arc::releaseClippingMask); });
     layerMenu->addAction("Bake clipping mask",this,[this] { edit("Bake clipping mask",[](auto &d) { if(d.active>=0) Arc::bakeClippingMask(d,d.active); }); });
-    layerMenu->addAction("Merge down",QKeySequence("Ctrl+E"),this,[this] { edit("Merge down",Arc::mergeDown); });
+    layerMenu->addAction("Merge layers / down",QKeySequence("Ctrl+E"),this,[this] {
+        QVector<QUuid> ids; for(auto *item:layers->selectedItems()) ids.append(item->data(0,Qt::UserRole+1).toUuid());
+        edit("Merge layers",[&](auto &d) {
+            if(ids.size()>1) Arc::mergeSelected(d,ids);
+            else if(d.active>=0 && d.layers[d.active].isGroup) Arc::mergeFolder(d);
+            else Arc::mergeDown(d);
+        });
+    });
     auto *maskMenu = layerMenu->addMenu("Mask");
     auto maskFill = [this](int value) {
         editLayer("Fill layer mask",[=](auto &l) { if (!l.mask.isNull()) l.mask.fill(QColor(value,value,value)); });

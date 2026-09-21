@@ -15,7 +15,7 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 - [x] Independent mask transforms, link/unlink, painting in mask coordinates, persistence
 - [x] Shear-producing group and linked-mask transforms (native rotated-rectangle projection)
 - [x] Mask fill/invert/blur/feather (Gaussian approximation documented)
-- [ ] Merge Down / Merge Layers / Merge Group
+- [x] Merge Down / Merge Layers / Merge Group
 - [x] Adjustment layers: Hue/Saturation, Levels, Curves, Exposure, Gradient Map, Grain
 - [x] All 14 blend modes (reference-color and transparency tests; macOS cross-render fixtures remain)
 - [x] Layer stroke, drop shadow, color overlay, and inner shadow effects

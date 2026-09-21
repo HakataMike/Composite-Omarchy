@@ -51,6 +51,16 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void mergeSelectedGroupsAdjustmentsAndBlends() {
+        auto d=sample(); auto top=d.layers[0]; top.id=QUuid::createUuid(); top.image.fill(Qt::green); top.blend="Multiply";
+        d.layers.append(top); d.active=1; auto expected=Arc::render(d); Arc::mergeDown(d); QCOMPARE(d.layers.size(),1); QCOMPARE(Arc::render(d),expected);
+        d=sample(); Arc::groupLayers(d,{d.layers[0].id}); auto groupID=d.layers[d.active].id;
+        Arc::Layer adjustment; adjustment.size=d.size; adjustment.name="Hue"; auto f=Arc::defaultFilter("Hue/Saturation"); f.values["hue"]=120;
+        adjustment.adjustment=Arc::adjustmentFromFilter(f,{}); d.layers.append(adjustment); d.active=d.layers.size()-1;
+        expected=Arc::render(d); Arc::mergeSelected(d,{groupID,adjustment.id}); QCOMPARE(d.layers.size(),1); QCOMPARE(Arc::render(d),expected);
+        QCOMPARE(d.layers[0].image.size(),QSize(16,12));
+        QTemporaryDir temp; auto file=temp.filePath("merged.comp"); Arc::saveProject(d,file); QCOMPARE(Arc::render(Arc::loadProject(file)),expected);
+    }
     void inlineTextApplyCancelSaveAndUndo() {
         Arc::Document d; d.size={400,200}; Arc::Layer text; text.name="Text"; text.text=Arc::textStyle(Qt::black);
         text.text["fontSize"]=20; text.text["boxSize"]=QJsonArray{200,100}; text.image=Arc::textImage(text.text); text.size=text.image.size(); text.origin={20,20}; d.layers={text}; d.active=0;
