@@ -39,7 +39,7 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 - [x] Clone stamp with source marker, three healing modes, content-aware fill, blur tool
 - [x] Levels/Auto, graphical Curves, selective Hue/Saturation, Exposure, Gradient Map, Grain/Noise, Invert
 - [x] Gaussian/motion blur with expanded bounds, lens correction (CPU approximations documented)
-- [ ] Background removal with a Linux implementation
+- Automatic AI background removal is intentionally excluded from the Linux port to keep installation small. Use selection tools and layer masks for manual background removal.
 - [x] Live selection-limited previews
 
 ## Final acceptance

@@ -27,6 +27,10 @@ Pass image filenames to import them at startup, or one `.comp` folder to open a 
 
 Qt selects its platform from the desktop environment. If needed, force native Wayland with `QT_QPA_PLATFORM=wayland ./scripts/linux-run.sh`.
 
+## Background removal
+
+The Linux port deliberately omits automatic AI background removal and has no Python runtime or AI model dependency. Use the lasso or magic wand to select the background, then erase within the selection or paint black on a layer mask to hide it. Feather the selection for softer edges; masks preserve the original image pixels.
+
 ## Available now
 
 - Import images through a file dialog, startup arguments, or drag and drop. PNG and JPEG are the baseline; other formats depend on installed Qt image plugins.
@@ -79,7 +83,7 @@ A local synthetic sample uses a 3840×2160 document with four full-size raster l
 
 1. Additional selection tools, unlinked/clipping masks, and grouping, with corresponding file-format support and regression tests.
 2. Adjustments, filters, text, and shape tools.
-3. Retouching and a Linux replacement for Apple Vision background removal.
+3. Remaining retouching behavior and selection workflows. Automatic AI background removal is intentionally excluded to keep the Linux installation small.
 4. Performance profiling, tiled rendering, and acceleration where measurements justify it.
 5. Broader macOS fixture compatibility, desktop packaging, and release automation.
 
