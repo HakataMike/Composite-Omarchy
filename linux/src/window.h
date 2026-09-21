@@ -43,6 +43,7 @@ private:
     void resizeDialog(bool resample);
     void filterDialog(const QString &kind);
     void shapeDialog();
+    void effectsDialog();
     void adjustmentDialog(QString kind = {});
     void guidesDialog();
     void textDialog(QRectF bounds = {}, QColor color = Qt::black, bool editActive = false);

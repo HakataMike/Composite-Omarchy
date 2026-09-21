@@ -2,6 +2,7 @@
 #include "styles.h"
 #include "clipping.h"
 #include "masks.h"
+#include "effects.h"
 #include <QColorSpace>
 #include <cmath>
 #include <algorithm>
@@ -109,8 +110,8 @@ void mergeDown(Document &d) {
         throw std::runtime_error("Merge Down needs two raster siblings. Use Merge Folder for a folder.");
     if (d.layers[top].blend != "Normal" || d.layers[bottom].blend != "Normal")
         throw std::runtime_error("Set both layers to Normal before merging. Other modes depend on the layers below them.");
-    QRectF extent = d.layers[top].transform().mapRect(QRectF(QPointF(),d.layers[top].size))
-        .united(d.layers[bottom].transform().mapRect(QRectF(QPointF(),d.layers[bottom].size)));
+    QRectF extent = visualBounds(d.layers[top])
+        .united(visualBounds(d.layers[bottom]));
     QRect bounds = extent.toAlignedRect(); checkSize(bounds.size());
     auto working=d; QSet<QUuid> removed{d.layers[bottom].id,d.layers[top].id};
     for(int i:{bottom,top}) if(!working.layers[i].maskSourceID.isNull() && !removed.contains(working.layers[i].maskSourceID)) bakeClippingMask(working,i);

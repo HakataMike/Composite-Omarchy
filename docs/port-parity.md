@@ -18,7 +18,7 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 - [ ] Merge Down / Merge Layers / Merge Group
 - [x] Adjustment layers: Hue/Saturation, Levels, Curves, Exposure, Gradient Map, Grain
 - [x] All 14 blend modes (reference-color and transparency tests; macOS cross-render fixtures remain)
-- [ ] Layer stroke/shadow effects
+- [x] Layer stroke, drop shadow, color overlay, and inner shadow effects
 - [ ] Multiple documents/tabs and inter-document layer transfer
 
 ## Selection and geometry

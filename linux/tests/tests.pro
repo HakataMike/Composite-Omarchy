@@ -30,3 +30,5 @@ HEADERS += ../src/masks.h
 SOURCES += ../src/adjustments.cpp
 HEADERS += ../src/adjustments.h
 SOURCES += ../src/adjustment_dialog.cpp
+SOURCES += ../src/effects.cpp
+HEADERS += ../src/effects.h

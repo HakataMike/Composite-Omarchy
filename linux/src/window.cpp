@@ -121,6 +121,7 @@ Window::Window() {
     auto *adjustments=layerMenu->addMenu("New adjustment layer");
     for(const auto &kind:Arc::adjustmentKinds()) adjustments->addAction(kind+"…",this,[this,kind] { adjustmentDialog(kind); });
     layerMenu->addAction("Edit adjustment…",this,[this] { adjustmentDialog(); });
+    layerMenu->addAction("Layer effects…",this,&Window::effectsDialog);
     layerMenu->addAction("Edit shape…",this,&Window::shapeDialog);
     layerMenu->addAction("Edit text…",this,[this] { textDialog({},Qt::black,true); });
     layerMenu->addAction("Create clipping mask",QKeySequence("Ctrl+Alt+G"),this,[this] { edit("Create clipping mask",Arc::createClippingMask); });
@@ -436,7 +437,8 @@ void Window::refresh() {
         auto *item=l.parentID.isNull() ? new QTreeWidgetItem(layers) : new QTreeWidgetItem(items[l.parentID]);
         item->setText(0,l.name); item->setText(1,l.maskSourceID.isNull() ? "" : "↳");
         if(!l.maskSourceID.isNull()) for(const auto &source:document.layers) if(source.id==l.maskSourceID)
-            item->setToolTip(1,"Clipped to "+source.name); item->setData(0,Qt::UserRole,i); item->setData(0,Qt::UserRole+1,l.id);
+            item->setToolTip(1,"Clipped to "+source.name);
+        item->setData(0,Qt::UserRole,i); item->setData(0,Qt::UserRole+1,l.id);
         auto flags=item->flags()|Qt::ItemIsEditable|Qt::ItemIsUserCheckable;
         if(!l.isGroup) flags &= ~Qt::ItemIsDropEnabled;
         item->setFlags(flags); item->setCheckState(0,l.visible ? Qt::Checked : Qt::Unchecked);

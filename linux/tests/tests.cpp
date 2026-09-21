@@ -1,5 +1,6 @@
 #include "../src/document.h"
 #include "../src/adjustments.h"
+#include "../src/effects.h"
 #include <QDialogButtonBox>
 #include "../src/operations.h"
 #include "../src/selection.h"
@@ -45,6 +46,54 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void effectsRenderingMasksAndPersistence() {
+        auto d=sample(); auto source=d.layers[0].image; auto stroke=Arc::defaultEffect("stroke");
+        stroke["size"]=2; stroke["blue"]=1; d.layers[0].effects={{"stroke",stroke}};
+        auto rendered=Arc::render(d); QCOMPARE(rendered.pixelColor(1,5),QColor(Qt::blue)); QCOMPARE(rendered.pixelColor(5,5),QColor(Qt::red));
+        QCOMPARE(d.layers[0].image,source);
+        auto bounds=Arc::visualBounds(d.layers[0]); QVERIFY(bounds.left()<d.layers[0].origin.x());
+        d.layers[0].mask=QImage(1,1,QImage::Format_Grayscale8); d.layers[0].mask.fill(Qt::black);
+        QCOMPARE(Arc::render(d).pixelColor(1,5).alpha(),0); d.layers[0].mask={};
+        auto overlay=Arc::defaultEffect("colorOverlay"); overlay["green"]=1; d.layers[0].effects["colorOverlay"]=overlay;
+        QCOMPARE(Arc::render(d).pixelColor(5,5),QColor(Qt::green));
+        auto shadow=Arc::defaultEffect("shadow"); shadow["distance"]=5; shadow["blur"]=0; shadow["opacity"]=1;
+        d.layers[0].effects={{"shadow",shadow}}; QCOMPARE(Arc::render(d).pixelColor(5,18),QColor(Qt::black));
+        auto inner=Arc::defaultEffect("innerShadow"); inner["distance"]=3; inner["blur"]=0; inner["opacity"]=1;
+        d.layers[0].effects={{"innerShadow",inner}}; QCOMPARE(Arc::render(d).pixelColor(5,3),QColor(Qt::black)); QCOMPARE(Arc::render(d).pixelColor(5,8),QColor(Qt::red));
+        d.layers[0].rotation=30; d.layers[0].flipX=true; d.layers[0].effects["stroke"]=stroke;
+        auto baked=Arc::renderedEffects(d.layers[0]);
+        auto center=d.layers[0].transform().map(QPointF(d.layers[0].size.width()/2,d.layers[0].size.height()/2));
+        QCOMPARE(baked.transform().map(QPointF(baked.size.width()/2,baked.size.height()/2)),center);
+        QTemporaryDir temp; auto file=temp.filePath("effects.comp"); Arc::saveProject(d,file);
+        auto loaded=Arc::loadProject(file); QCOMPARE(loaded.layers,d.layers); QCOMPARE(Arc::render(loaded),Arc::render(d));
+        auto invalid=stroke; invalid["size"]=-1; QVERIFY_THROWS_EXCEPTION(std::runtime_error,Arc::validateEffects({{"stroke",invalid}}));
+        Arc::Layer folder; folder.isGroup=true; folder.size=d.size; folder.mask=QImage(1,1,QImage::Format_Grayscale8); folder.mask.fill(Qt::black);
+        d.layers[0].parentID=folder.id; d.layers.append(folder); QCOMPARE(Arc::render(d).pixelColor(5,5).alpha(),0);
+    }
+    void effectsMergingPreservesExtent() {
+        auto d=sample(); d.size={64,64}; auto top=d.layers[0]; top.id=QUuid::createUuid(); top.origin={30,30}; top.image.fill(Qt::green);
+        auto stroke=Arc::defaultEffect("stroke"); stroke["size"]=4; top.effects={{"stroke",stroke}};
+        d.layers.append(top); d.active=1; auto before=Arc::render(d); Arc::mergeDown(d); QCOMPARE(Arc::render(d),before);
+        auto groupDoc=sample(); groupDoc.size={64,64}; top.parentID={}; groupDoc.layers.append(top);
+        Arc::groupLayers(groupDoc,{groupDoc.layers[0].id,top.id}); before=Arc::render(groupDoc); Arc::mergeFolder(groupDoc); QCOMPARE(Arc::render(groupDoc),before);
+    }
+    void effectsDialogCancelUndo() {
+        auto d=sample(); QTemporaryDir temp; auto file=temp.filePath("effect-ui.comp"); Arc::saveProject(d,file);
+        Window window; window.show(); window.openProject(file); QAction *effects=nullptr,*save=nullptr,*undo=nullptr;
+        for(auto *a:window.findChildren<QAction *>()) {
+            if(a->text()=="Layer effects…") effects=a;
+            if(a->text()=="&Save project") save=a;
+            if(a->shortcut()==QKeySequence::Undo) undo=a;
+        }
+        QVERIFY(effects && save && undo);
+        QTimer::singleShot(50,[&] { auto *dialog=qobject_cast<QDialog *>(QApplication::activeModalWidget()); QVERIFY(dialog);
+            dialog->findChild<QCheckBox *>("strokeIncluded")->setChecked(true); dialog->findChild<QDoubleSpinBox *>("strokesize")->setValue(2); dialog->accept(); });
+        effects->trigger(); save->trigger(); auto changed=Arc::loadProject(file); QVERIFY(!changed.layers[0].effects.isEmpty());
+        QTimer::singleShot(50,[&] { auto *dialog=qobject_cast<QDialog *>(QApplication::activeModalWidget()); QVERIFY(dialog);
+            dialog->findChild<QCheckBox *>("strokeIncluded")->setChecked(false); dialog->reject(); });
+        effects->trigger(); save->trigger(); QCOMPARE(Arc::loadProject(file).layers,changed.layers);
+        undo->trigger(); save->trigger(); QCOMPARE(Arc::loadProject(file).layers,d.layers);
+    }
     void adjustmentRenderingAndPersistence() {
         auto d=sample(); auto source=d.layers[0].image;
         Arc::Layer adjustment; adjustment.name="Hue"; adjustment.size=d.size;

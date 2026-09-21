@@ -2,6 +2,7 @@
 #include "styles.h"
 #include "clipping.h"
 #include "masks.h"
+#include "effects.h"
 #include <QHash>
 #include <QSet>
 #include <cmath>
@@ -134,7 +135,7 @@ void mergeFolder(Document &d) {
     if(d.active<0 || !d.layers[d.active].isGroup) throw std::runtime_error("Select a folder to merge.");
     auto folder=d.layers[d.active]; auto children=descendants(d,folder.id);
     QRectF extent;
-    for(int i:children) if(!d.layers[i].isGroup) extent=extent.united(d.layers[i].transform().mapRect(QRectF(QPointF(),d.layers[i].size)));
+    for(int i:children) if(!d.layers[i].isGroup) extent=extent.united(visualBounds(d.layers[i]));
     if(extent.isEmpty() || extent.width()>30000 || extent.height()>30000 || std::abs(extent.x())>1000000 || std::abs(extent.y())>1000000)
         throw std::runtime_error("Folder is empty or exceeds the supported raster bounds.");
     auto bounds=extent.toAlignedRect();

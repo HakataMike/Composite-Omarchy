@@ -1,5 +1,7 @@
 #include "window.h"
 #include "styles.h"
+#include "effects.h"
+#include <QTabWidget>
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
@@ -181,4 +183,68 @@ void Window::guidesDialog() {
     refresh(); change.setEnabled(false); remove.setEnabled(false);
     int accepted=dialog.exec(); canvas->setDocument(original);
     if(accepted==QDialog::Accepted) edit("Edit guides",[&](auto &d) { d.guides=guides; });
+}
+
+void Window::effectsDialog() {
+    if(document.active<0 || document.layers[document.active].image.isNull()) return;
+    const auto original=document; const int index=document.active; auto draft=original.layers[index].effects;
+    QDialog dialog(this); dialog.setWindowTitle("Layer effects"); dialog.setMinimumWidth(360);
+    QVBoxLayout layout(&dialog); QTabWidget tabs; layout.addWidget(&tabs);
+    QMap<QString,QCheckBox *> present,enabled,inside;
+    QMap<QString,QMap<QString,QDoubleSpinBox *>> fields;
+    QTimer timer; timer.setSingleShot(true); timer.setInterval(100);
+    auto schedule=[&] { timer.start(); };
+    QStringList labels{"Stroke","Drop shadow","Color overlay","Inner shadow"};
+    int label=0;
+    for(auto kind:Arc::effectKinds()) {
+        auto *page=new QWidget; auto *form=new QFormLayout(page); tabs.addTab(page,labels[label++]);
+        auto settings=draft[kind].toObject(); const bool exists=!settings.isEmpty(); if(!exists) settings=Arc::defaultEffect(kind);
+        draft[kind]=settings;
+        auto *include=new QCheckBox("Include effect"),*visible=new QCheckBox("Visible");
+        include->setObjectName(kind+"Included"); visible->setObjectName(kind+"Enabled");
+        include->setChecked(exists); visible->setChecked(settings["enabled"].toBool(true));
+        present[kind]=include; enabled[kind]=visible; form->addRow(include); form->addRow(visible);
+        auto add=[&](QString key,QString name,double low,double high) {
+            auto *field=numeric(form,name,settings[key].toDouble(),low,high); field->setObjectName(kind+key);
+            fields[kind][key]=field; connect(field,&QDoubleSpinBox::valueChanged,&dialog,schedule);
+        };
+        add("opacity","Opacity",0,1);
+        if(kind=="stroke") {
+            add("size","Width (source pixels)",0,500);
+            auto *box=new QCheckBox("Inside edge"); box->setChecked(settings["inside"].toBool()); inside[kind]=box; form->addRow(box);
+            connect(box,&QCheckBox::toggled,&dialog,schedule);
+        }
+        if(kind=="shadow" || kind=="innerShadow") {
+            add("angle","Light angle",-360,360); add("distance","Distance (source pixels)",0,5000); add("blur","Blur",0,500);
+        }
+        auto *color=new QPushButton("Color…"); form->addRow(color);
+        connect(color,&QPushButton::clicked,&dialog,[&,kind] {
+            auto settings=draft[kind].toObject(); auto value=QColorDialog::getColor(styleColor(settings),&dialog);
+            if(value.isValid()) { setColor(settings,value); draft[kind]=settings; schedule(); }
+        });
+        connect(include,&QCheckBox::toggled,&dialog,schedule); connect(visible,&QCheckBox::toggled,&dialog,schedule);
+    }
+    QCheckBox preview("Live preview"); preview.setChecked(true); layout.addWidget(&preview);
+    QLabel error; error.setWordWrap(true); layout.addWidget(&error);
+    QDialogButtonBox buttons(QDialogButtonBox::Ok|QDialogButtonBox::Cancel); layout.addWidget(&buttons);
+    QJsonObject effects; bool valid=false;
+    auto update=[&] {
+        try {
+            effects={};
+            for(auto kind:Arc::effectKinds()) {
+                auto settings=draft[kind].toObject(); settings["enabled"]=enabled[kind]->isChecked();
+                for(auto i=fields[kind].begin();i!=fields[kind].end();++i) settings[i.key()]=i.value()->value();
+                if(inside.contains(kind)) settings["inside"]=inside[kind]->isChecked();
+                if(present[kind]->isChecked()) effects[kind]=settings;
+            }
+            Arc::validateEffects(effects); auto shown=original; shown.layers[index].effects=effects;
+            canvas->setDocument(preview.isChecked() ? shown : original); error.clear(); valid=true;
+        } catch(const std::exception &e) { error.setText(QString::fromUtf8(e.what())); valid=false; canvas->setDocument(original); }
+        buttons.button(QDialogButtonBox::Ok)->setEnabled(valid);
+    };
+    connect(&timer,&QTimer::timeout,&dialog,update); connect(&preview,&QCheckBox::toggled,&dialog,schedule);
+    connect(&buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept); connect(&buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+    timer.start(0); int accepted=dialog.exec(); timer.stop(); if(accepted==QDialog::Accepted) update();
+    canvas->setDocument(original);
+    if(accepted==QDialog::Accepted && valid) edit("Edit layer effects",[&](auto &d) { d.layers[index].effects=effects; });
 }
