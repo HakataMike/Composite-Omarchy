@@ -4,6 +4,7 @@
 #include "styles.h"
 #include <QSet>
 #include <QHash>
+#include <QPainterPath>
 #include <cmath>
 #include <stdexcept>
 namespace Arc {
@@ -53,27 +54,69 @@ void transformLayers(Document &d,const QVector<QUuid> &selected,const Layer &bef
     validate(d);
 }
 namespace {
-QImage warped(const QImage &source,const Layer &placement,const QTransform &mapping,QRect &bounds,bool mask) {
-    auto transform=placement.transform()*mapping; auto extent=transform.mapRect(QRectF(QPointF(),placement.size));
-    if(!std::isfinite(extent.x()) || !std::isfinite(extent.y()) || std::abs(extent.x())>1000000 || std::abs(extent.y())>1000000
-        || extent.width()<1 || extent.height()<1 || extent.width()>30000 || extent.height()>30000) throw std::runtime_error("Distortion exceeds supported bounds.");
-    bounds=extent.toAlignedRect(); if(qint64(bounds.width())*bounds.height()>MaxPixels) throw std::runtime_error("Distortion exceeds 100 megapixels.");
+double area(QPointF a,QPointF b,QPointF c) {
+    auto u=b-a,v=c-a; return u.x()*v.y()-u.y()*v.x();
+}
+void checkQuad(const QPolygonF &quad) {
+    if(quad.size()!=4) throw std::runtime_error("Distortion needs four corners.");
+    for(auto p:quad) if(!std::isfinite(p.x()) || !std::isfinite(p.y()) || std::abs(p.x())>1000000 || std::abs(p.y())>1000000)
+        throw std::runtime_error("Distortion exceeds supported coordinates.");
+    if(std::abs(area(quad[0],quad[1],quad[2]))<=0.01 || std::abs(area(quad[0],quad[2],quad[3]))<=0.01)
+        throw std::runtime_error("Distortion would collapse a triangle.");
+}
+bool convex(const QPolygonF &quad) {
+    double sign=area(quad[0],quad[1],quad[2]);
+    for(int i=1;i<4;++i) if(area(quad[i],quad[(i+1)%4],quad[(i+2)%4])*sign<=0) return false;
+    return true;
+}
+QRect warpBounds(const QPolygonF &corners) {
+    checkQuad(corners); auto extent=corners.boundingRect();
+    if(extent.width()<1 || extent.height()<1 || extent.width()>30000 || extent.height()>30000)
+        throw std::runtime_error("Distortion exceeds supported bounds.");
+    auto bounds=extent.toAlignedRect();
+    if(qint64(bounds.width())*bounds.height()>MaxPixels) throw std::runtime_error("Distortion exceeds 100 megapixels.");
+    return bounds;
+}
+QPolygonF mappedCorners(const Layer &layer,const QTransform &mapping) {
+    QPolygonF result;
+    // Qt clamps negative projective denominators for drawing. A folded quad
+    // deliberately crosses that plane; its corner coordinates still need the
+    // signed homogeneous division before the two affine halves are drawn.
+    for(auto p:layerCorners(layer)) {
+        double w=mapping.m13()*p.x()+mapping.m23()*p.y()+mapping.m33();
+        if(std::abs(w)<1e-12) throw std::runtime_error("Distortion crosses an infinite corner.");
+        result.append(QPointF((mapping.m11()*p.x()+mapping.m21()*p.y()+mapping.m31())/w,
+                             (mapping.m12()*p.x()+mapping.m22()*p.y()+mapping.m32())/w));
+    }
+    return result;
+}
+QTransform triangleBasis(QPointF a,QPointF b,QPointF c) {
+    auto u=b-a,v=c-a; return QTransform(u.x(),u.y(),v.x(),v.y(),a.x(),a.y());
+}
+QImage warped(const QImage &source,const Layer &placement,const QPolygonF &corners,QRect &bounds,bool mask) {
+    bounds=warpBounds(corners);
     if(mask && source.size()==QSize(1,1)) return source;
     QImage result(bounds.size(),mask ? QImage::Format_Grayscale8 : QImage::Format_ARGB32_Premultiplied);
     if(result.isNull()) throw std::runtime_error("Insufficient memory for distortion.");
     result.fill(mask ? Qt::black : Qt::transparent);
-    QPainter p(&result); p.translate(-bounds.topLeft()); p.setTransform(transform,true);
-    p.setRenderHint(QPainter::SmoothPixmapTransform,placement.sampling!="Nearest"); p.drawImage(QRectF(QPointF(),placement.size),source); return result;
-}
-void checkQuad(const QPolygonF &quad) {
-    if(quad.size()!=4) throw std::runtime_error("Distortion needs four corners.");
-    double previous=0;
-    for(int i=0;i<4;++i) {
-        auto p=quad[i],a=quad[(i+1)%4]-p,b=quad[(i+2)%4]-quad[(i+1)%4]; double cross=a.x()*b.y()-a.y()*b.x();
-        if(!std::isfinite(p.x()) || !std::isfinite(p.y()) || std::abs(p.x())>1000000 || std::abs(p.y())>1000000
-            || std::abs(cross)<1e-6 || previous*cross<0) throw std::runtime_error("Distortion corners must form a convex, non-collapsed shape.");
-        previous=cross;
+    QPainter p(&result); p.translate(-bounds.topLeft());
+    p.setRenderHint(QPainter::SmoothPixmapTransform,placement.sampling!="Nearest");
+    QPolygonF rectangle{QPointF(0,0),QPointF(placement.size.width(),0),QPointF(placement.size.width(),placement.size.height()),QPointF(0,placement.size.height())};
+    if(convex(corners)) {
+        QTransform transform;
+        if(!QTransform::quadToQuad(rectangle,corners,transform)) throw std::runtime_error("Cannot map distortion corners.");
+        p.setTransform(transform,true); p.drawImage(QRectF(QPointF(),placement.size),source);
+    } else {
+        // Like the native editor, draw the two halves in order with a hard shared
+        // diagonal. Perspective alone cannot represent a folded quadrilateral.
+        for(int half=0;half<2;++half) {
+            int b=half==0 ? 1 : 2,c=half==0 ? 2 : 3;
+            auto transform=triangleBasis(rectangle[0],rectangle[b],rectangle[c]).inverted()*triangleBasis(corners[0],corners[b],corners[c]);
+            QPainterPath clip; clip.addPolygon(QPolygonF{corners[0],corners[b],corners[c]}); clip.closeSubpath();
+            p.save(); p.setClipPath(clip); p.setTransform(transform,true); p.drawImage(QRectF(QPointF(),placement.size),source); p.restore();
+        }
     }
+    return result;
 }
 }
 void distortLayers(Document &d,const QVector<QUuid> &selected,const QPolygonF &before,const QPolygonF &after) {
@@ -81,21 +124,22 @@ void distortLayers(Document &d,const QVector<QUuid> &selected,const QPolygonF &b
     if(!QTransform::quadToQuad(before,after,mapping)) throw std::runtime_error("Cannot map distortion corners.");
     QSet<QUuid> chosen;
     for(auto id:selectedRoots(d,selected)) { chosen.insert(id); for(int i:descendants(d,id)) chosen.insert(d.layers[i].id); }
-    auto original=d;
+    auto changed=d;
     for(int i=0;i<d.layers.size();++i) if(chosen.contains(d.layers[i].id)) {
-        auto &l=d.layers[i]; const auto &old=original.layers[i]; QRect bounds;
-        if(!l.image.isNull()) l.image=warped(l.image,old,mapping,bounds,false);
-        else bounds=mapping.mapRect(layerCorners(old).boundingRect()).toAlignedRect();
+        auto &l=changed.layers[i]; const auto &old=d.layers[i]; QRect bounds;
+        auto corners=mappedCorners(old,mapping);
+        if(!l.image.isNull()) l.image=warped(l.image,old,corners,bounds,false);
+        else bounds=warpBounds(corners);
         if(!l.mask.isNull()) {
             if(l.maskLinked) {
                 auto placement=maskTargetLayer(old); QRect maskBounds;
-                l.mask=warped(l.mask,placement,mapping,maskBounds,true);
+                l.mask=warped(l.mask,placement,mappedCorners(placement,mapping),maskBounds,true);
                 placement.origin=maskBounds.topLeft(); placement.size=maskBounds.size(); placement.rotation=0; placement.flipX=placement.flipY=false;
                 l.maskPlacement=placementOf(placement);
             } else if(l.maskPlacement.isEmpty()) l.maskPlacement=placementOf(old);
         }
         l.origin=bounds.topLeft(); l.size=bounds.size(); l.rotation=0; l.flipX=l.flipY=false; rasterize(l);
     }
-    validate(d);
+    validate(changed); d=changed;
 }
 }

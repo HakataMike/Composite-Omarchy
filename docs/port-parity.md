@@ -26,7 +26,7 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 - [x] Ellipse, freehand/polygonal lasso, magic wand
 - [x] Add/subtract/invert/feather selections; load image/mask coverage
 - [x] Move outlines/pixels, duplicate selected pixels, clipboard
-- [ ] Transform handles and multiple-layer transforms implemented; convex free distortion implemented, folded shapes remain
+- [x] Transform handles, multiple-layer transforms, perspective and folded/concave free distortion
 - [x] Persistent guides, guide editing/locking/visibility, canvas flips
 - [x] Snapping for movement, resize, shapes, selections, and crop; rulers and ruler guides
 - [x] Interactive/symmetric crop, crop to selection bounds, canvas size, image size/resolution

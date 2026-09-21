@@ -140,6 +140,23 @@ private slots:
         QTemporaryDir temp; auto file=temp.filePath("distorted.comp"); Arc::saveProject(d,file); QCOMPARE(Arc::render(Arc::loadProject(file)),Arc::render(d));
         auto invalid=before; invalid[0]=invalid[2]; QVERIFY_THROWS_EXCEPTION(std::runtime_error,Arc::distortLayers(d,{id},before,invalid));
     }
+    void foldedDistortionAndMasks() {
+        auto d=sample(); auto &layer=d.layers[0]; layer.origin={0,0}; layer.size={20,20};
+        layer.image=QImage(20,20,QImage::Format_ARGB32_Premultiplied); layer.image.fill(Qt::red);
+        layer.mask=QImage(20,20,QImage::Format_Grayscale8); layer.mask.fill(QColor(128,128,128));
+        auto before=Arc::layerCorners(layer); auto id=layer.id;
+        // A dented quad and a bow-tie both need two affine triangles.
+        for(auto after:{QPolygonF{{12,12},{20,0},{20,20},{0,20}},QPolygonF{{24,0},{20,0},{20,20},{0,20}}}) {
+            auto changed=d; Arc::distortLayers(changed,{id},before,after); Arc::validate(changed);
+            int covered=0; for(int y=0;y<changed.layers[0].image.height();++y) for(int x=0;x<changed.layers[0].image.width();++x)
+                if(changed.layers[0].image.pixelColor(x,y).alpha()) ++covered;
+            QVERIFY(covered>20); QVERIFY(covered<changed.layers[0].image.width()*changed.layers[0].image.height());
+            auto rendered=Arc::render(changed); QVERIFY(rendered.pixelColor(18,16).alpha()<=130);
+            QTemporaryDir temp; auto path=temp.filePath("fold.comp"); Arc::saveProject(changed,path); QCOMPARE(Arc::render(Arc::loadProject(path)),rendered);
+        }
+        auto original=d; auto collapsed=before; collapsed[0]=collapsed[2];
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error,Arc::distortLayers(d,{id},before,collapsed)); QCOMPARE(d.layers,original.layers);
+    }
     void transformHandleGesturesAndCancellation() {
         auto d=sample(); Canvas canvas; canvas.resize(640,480); canvas.show(); canvas.setDocument(d); canvas.fit(); canvas.setTool(Canvas::Tool::Move);
         QSignalSpy transformed(&canvas,&Canvas::layersTransformed); auto point=[&](QPointF p) { return canvas.canvasToWidget(p).toPoint(); };
