@@ -1,6 +1,6 @@
 # Compositor ARC
 
-A free, open-source image editor for Linux and Omarchy, built with C++ and Qt 6. Combine images, paint and retouch, add text and shapes, and adjust colors in a layered workspace.
+A free, small file-size (<10MB) open-source image editor for Linux and Omarchy, built with C++ and Qt 6. Combine images, paint and retouch, add text and shapes, and adjust colors in a layered workspace.
 
 ## Features
 
