@@ -51,6 +51,18 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void radialTransparentGradientsAndHealingModes() {
+        auto d=sample(); auto layer=d.layers[0]; layer.origin={0,0}; layer.image.fill(Qt::transparent);
+        Arc::Brush brush; brush.color=Qt::red;
+        auto radial=Arc::gradientStroke(layer,{8,6},{12,6},brush,Qt::blue,QRectF(0,0,16,12),{},false,{true,false,false});
+        QVERIFY(radial.pixelColor(8,6).red()>radial.pixelColor(12,6).red()); QVERIFY(radial.pixelColor(12,6).blue()>200);
+        auto fading=Arc::gradientStroke(layer,{0,0},{8,0},brush,Qt::blue,QRectF(0,0,16,12),{},false,{false,true,false});
+        QVERIFY(fading.pixelColor(0,0).alpha()>200); QCOMPARE(fading.pixelColor(10,0).alpha(),0);
+        auto reversed=Arc::gradientStroke(layer,{0,0},{8,0},brush,Qt::blue,QRectF(0,0,16,12),{},false,{false,true,true});
+        QVERIFY(reversed.pixelColor(10,0).alpha()>200); QVERIFY(reversed.pixelColor(0,0).alpha()<50);
+        layer=d.layers[0]; QPainterPath path; path.moveTo(8,8); brush.diameter=3;
+        for(int mode=0;mode<3;++mode) { auto healed=Arc::healStroke(layer,path,brush,QRectF(QPointF(),d.size),{},mode); QCOMPARE(healed.size(),layer.image.size()); }
+    }
     void mergeSelectedGroupsAdjustmentsAndBlends() {
         auto d=sample(); auto top=d.layers[0]; top.id=QUuid::createUuid(); top.image.fill(Qt::green); top.blend="Multiply";
         d.layers.append(top); d.active=1; auto expected=Arc::render(d); Arc::mergeDown(d); QCOMPARE(d.layers.size(),1); QCOMPARE(Arc::render(d),expected);

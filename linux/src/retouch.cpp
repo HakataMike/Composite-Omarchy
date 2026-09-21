@@ -2,6 +2,7 @@
 #include "masks.h"
 #include "operations.h"
 #include <QLinearGradient>
+#include <QRadialGradient>
 #include <stdexcept>
 #include <cstring>
 #include <algorithm>
@@ -38,26 +39,30 @@ QImage mix(const QImage &source,const QImage &changed,const QImage &coverage) {
     return gray ? result.convertToFormat(QImage::Format_Grayscale8) : result;
 }
 }
-QImage gradientStroke(const Layer &layer,QPointF start,QPointF end,const Brush &brush,QColor background,QRectF clip,const QPainterPath &selection,bool mask) {
+QImage gradientStroke(const Layer &layer,QPointF start,QPointF end,const Brush &brush,QColor background,QRectF clip,const QPainterPath &selection,bool mask,const GradientOptions &options) {
     QImage image=mask ? layer.mask : layer.image;
     if(mask && image.size()==QSize(1,1)) image=image.scaled(maskEditingSize(layer));
     if(start==end) return image;
     if(image.isNull()) throw std::runtime_error("Select a raster layer or mask for the gradient.");
     QColor foreground=brush.color;
     if(mask) { int a=qGray(foreground.rgb()),b=qGray(background.rgb()); foreground=QColor(a,a,a); background=QColor(b,b,b); }
+    if(options.transparent) { background=foreground; background.setAlpha(0); }
+    if(options.reversed) std::swap(foreground,background);
     image=image.copy(); if(image.isNull()) throw std::runtime_error("Insufficient memory for gradient.");
     QPainter p(&image); p.setTransform(mapping(mask ? maskTargetLayer(layer) : layer,image.size())); p.setClipRect(clip);
     if(!selection.isEmpty()) p.setClipPath(selection,Qt::IntersectClip);
-    QLinearGradient gradient(start,end); gradient.setColorAt(0,foreground); gradient.setColorAt(1,background);
+    QGradient gradient=options.radial ? QGradient(QRadialGradient(start,QLineF(start,end).length())) : QGradient(QLinearGradient(start,end));
+    gradient.setColorAt(0,foreground); gradient.setColorAt(1,background);
     p.setOpacity(brush.opacity); p.fillRect(clip,gradient); return image;
 }
-QImage healStroke(const Layer &layer,const QPainterPath &path,const Brush &brush,QRectF clip,const QPainterPath &selection) {
+QImage healStroke(const Layer &layer,const QPainterPath &path,const Brush &brush,QRectF clip,const QPainterPath &selection,int mode) {
+    if(mode<0 || mode>2) throw std::runtime_error("Invalid healing mode.");
     auto pixels=layer.image.convertToFormat(QImage::Format_RGBA8888_Premultiplied);
     if(pixels.isNull()) throw std::runtime_error("Select an image to heal.");
     auto mask=coverage(layer,path,brush,clip,selection,pixels.size());
     QByteArray tight(qsizetype(pixels.width())*pixels.height(),0);
     for(int y=0;y<pixels.height();++y) std::memcpy(tight.data()+y*pixels.width(),mask.constScanLine(y),pixels.width());
-    if(spot_heal(pixels.bits(),reinterpret_cast<const uint8_t *>(tight.constData()),pixels.width(),pixels.height(),pixels.bytesPerLine(),1,0,1)!=0)
+    if(spot_heal(pixels.bits(),reinterpret_cast<const uint8_t *>(tight.constData()),pixels.width(),pixels.height(),pixels.bytesPerLine(),1,mode,1)!=0)
         throw std::runtime_error("Insufficient memory for healing.");
     return pixels.convertToFormat(QImage::Format_ARGB32_Premultiplied);
 }

@@ -117,10 +117,10 @@ void Canvas::updateStroke(QPointF point) {
         if (selection) clip = clip.intersected(selection->boundingRect());
         if(tool==Tool::Gradient) {
             QPointF start(strokePath.elementAt(0).x,strokePath.elementAt(0).y);
-            auto result=Arc::gradientStroke(strokeOriginal,start,point,settings,backgroundColor,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()),maskTarget);
+            auto result=Arc::gradientStroke(strokeOriginal,start,point,settings,backgroundColor,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()),maskTarget,gradientOptions);
             if(maskTarget) document.layers[dragLayer].mask=result; else document.layers[dragLayer].image=result;
         } else if(tool==Tool::Clone) document.layers[dragLayer].image=Arc::cloneStroke(strokeOriginal,cloneSample,*cloneOffset,strokePath,settings,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()));
-        else if(tool==Tool::Heal) document.layers[dragLayer].image=Arc::healStroke(strokeOriginal,strokePath,settings,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()));
+        else if(tool==Tool::Heal) document.layers[dragLayer].image=Arc::healStroke(strokeOriginal,strokePath,settings,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()),healingMode);
         else if(tool==Tool::Blur) {
             auto result=Arc::blurStroke(strokeOriginal,strokePath,settings,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()),maskTarget);
             if(maskTarget) document.layers[dragLayer].mask=result; else document.layers[dragLayer].image=result;
@@ -209,6 +209,13 @@ void Canvas::paintEvent(QPaintEvent *) {
         QPen black(Qt::black, 1, Qt::DashLine); black.setCosmetic(true);
         p.setPen(black); p.drawPath(*selection);
     }
+    if(tool==Tool::Clone && cloneAnchor) {
+        auto point=cloneOffset && (cloneAligned || painting) ? documentPoint(pointerPosition)+*cloneOffset : *cloneAnchor;
+        QPen cross(Qt::white,2); cross.setCosmetic(true); p.setPen(cross);
+        p.drawLine(point-QPointF(6/zoom,0),point+QPointF(6/zoom,0)); p.drawLine(point-QPointF(0,6/zoom),point+QPointF(0,6/zoom));
+        cross.setColor(Qt::black); cross.setWidth(1); p.setPen(cross);
+        p.drawLine(point-QPointF(6/zoom,0),point+QPointF(6/zoom,0)); p.drawLine(point-QPointF(0,6/zoom),point+QPointF(0,6/zoom));
+    }
     if (underMouse() && !panning && (tool == Tool::Brush || tool == Tool::Eraser || tool == Tool::Clone || tool == Tool::Heal || tool == Tool::Blur)) {
         QPointF center = documentPoint(pointerPosition);
         QPen white(Qt::white, 2); white.setCosmetic(true);
@@ -270,7 +277,7 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
     if (tool == Tool::Wand) {
         previousSelection=selection; previousSelectionMask=selectionMask;
         selectionOperation=(event->modifiers() & Qt::AltModifier) ? 2 : (event->modifiers() & Qt::ShiftModifier) ? 1 : 0;
-        try { combineSelection(Arc::wandSelection(composite,documentPoint(event->position()).toPoint(),wandTolerance,true)); }
+        try { combineSelection(Arc::wandSelection(composite,documentPoint(event->position()).toPoint(),wandTolerance,wandContiguous)); }
         catch(const std::exception &error) { emit errorOccurred(QString::fromUtf8(error.what())); }
         previousSelection.reset(); return;
     }
@@ -308,10 +315,10 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
         if(maskTarget && (tool==Tool::Clone || tool==Tool::Heal)) { emit errorOccurred("Clone and healing tools edit image pixels. Choose Paint image first."); return; }
         if(tool==Tool::Clone) {
             if(!cloneAnchor) { emit errorOccurred("Alt-click to choose the clone source first."); return; }
-            if(!cloneAligned || !cloneOffset) cloneOffset=*cloneAnchor-documentPoint(event->position());
+            if(!cloneAligned || !cloneOffset) { auto offset=*cloneAnchor-documentPoint(event->position()); cloneOffset=QPointF(std::round(offset.x()),std::round(offset.y())); }
             try {
             if(cloneAll) cloneSample=composite;
-            else { auto single=document; single.layers={document.layers[index]}; single.active=0; single.layers[0].parentID={}; single.layers[0].maskSourceID={}; single.layers[0].opacity=1; single.layers[0].blend="Normal"; single.layers[0].maskEnabled=false; cloneSample=Arc::render(single); }
+            else { auto single=document; single.layers={document.layers[index]}; single.active=0; single.layers[0].parentID={}; single.layers[0].maskSourceID={}; single.layers[0].opacity=1; single.layers[0].blend="Normal"; single.layers[0].effects={}; single.layers[0].maskEnabled=false; cloneSample=Arc::render(single); }
             } catch(const std::exception &error) { cloneSample=QImage(); emit errorOccurred(QString::fromUtf8(error.what())); return; }
         }
         dragLayer = index;

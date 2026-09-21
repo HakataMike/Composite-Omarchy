@@ -256,6 +256,20 @@ Window::Window() {
     auto cloneOptions = [this, aligned, allLayers] { canvas->setCloneOptions(aligned->isChecked(), allLayers->isChecked()); };
     connect(aligned, &QAction::toggled, this, cloneOptions);
     connect(allLayers, &QAction::toggled, this, cloneOptions);
+    auto *gradientMenu=optionsMenu->addMenu("Gradient");
+    auto *radial=gradientMenu->addAction("Radial"); radial->setCheckable(true);
+    auto *transparent=gradientMenu->addAction("Foreground to transparent"); transparent->setCheckable(true);
+    auto *reverse=gradientMenu->addAction("Reverse"); reverse->setCheckable(true);
+    auto gradientOptions=[this,radial,transparent,reverse] { canvas->setGradientOptions({radial->isChecked(),transparent->isChecked(),reverse->isChecked()}); };
+    for(auto *action:{radial,transparent,reverse}) connect(action,&QAction::toggled,this,gradientOptions);
+    auto *healingMenu=optionsMenu->addMenu("Healing mode"); auto *healingGroup=new QActionGroup(this);
+    QStringList healingNames{"Content-Aware","Create Texture","Proximity Match"};
+    for(int mode=0;mode<healingNames.size();++mode) {
+        auto *action=healingMenu->addAction(healingNames[mode]); action->setCheckable(true); action->setChecked(mode==0); healingGroup->addAction(action);
+        connect(action,&QAction::triggered,this,[this,mode] { canvas->setHealingMode(mode); });
+    }
+    auto *contiguous=optionsMenu->addAction("Contiguous magic wand"); contiguous->setCheckable(true); contiguous->setChecked(true);
+    connect(contiguous,&QAction::toggled,canvas,&Canvas::setWandContiguous);
     auto *options = new QToolButton; options->setText("Options"); options->setMenu(optionsMenu);
     options->setPopupMode(QToolButton::InstantPopup); tools->addWidget(options);
     auto *tolerance=new QSpinBox; tolerance->setRange(0,255); tolerance->setValue(32);

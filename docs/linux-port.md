@@ -89,7 +89,7 @@ Adjustment controls: destructive adjustments share the layer-adjustment controls
 
 Retouching tools are available from the tool dropdown: Eyedropper (I), Gradient (G), Clone Stamp (S), Healing (J), and Blur Brush. Alt-click selects a clone source. Options controls aligned cloning, sampling all visible layers, and the gradient end color (white by default). Gradient, blur, brush, and eraser support masks. Shift-click with the brush or eraser connects to the previous stroke endpoint. Retouching previews cancel with Escape and commit as a single undo step.
 
-Healing currently uses Content-Aware mode; Create Texture and Proximity Match remain to be exposed. Clone/heal currently target image pixels, not masks. Clone sources are captured at stroke start to avoid recursive smearing. The gradient is linear; radial and transparent-stop variants remain. Blur uses the same bounded three-box approximation as the filter.
+Options → Healing mode offers Content-Aware, Create Texture, and Proximity Match. Clone/heal currently target image pixels, not masks. Clone sources are captured at stroke start to avoid recursive smearing; the crosshair shows the sampled location. Options also controls whether the magic wand selects contiguous regions. Options → Gradient offers radial shape, foreground-to-transparent stops, and reversal. Blur uses the same bounded three-box approximation as the filter.
 
 Editable shapes: drag Rectangle (U), Ellipse, or Line from the tool menu. Shift constrains squares/circles or 45-degree lines; Alt grows from the center. Layer → Edit shape changes fill, corner radius, and line width. Resizing a shape in the inspector redraws its geometry at the new size.
 

@@ -1,6 +1,7 @@
 #pragma once
 #include "document.h"
 #include "painting.h"
+#include "retouch.h"
 #include <QWidget>
 #include <optional>
 
@@ -26,6 +27,9 @@ public:
     void featherSelection(int radius);
     void invertSelection();
     std::optional<QPainterPath> selectedPath() const { return selection; }
+    void setGradientOptions(Arc::GradientOptions value) { cancelGesture(); gradientOptions=value; }
+    void setHealingMode(int mode) { cancelGesture(); healingMode=mode; }
+    void setWandContiguous(bool value) { wandContiguous=value; }
     void setBackgroundColor(QColor color) { backgroundColor=color; }
     void setCloneOptions(bool aligned,bool allLayers) { cloneAligned=aligned; cloneAll=allLayers; }
     void setWandTolerance(int value) { wandTolerance = value; }
@@ -92,6 +96,9 @@ private:
     Tool tool = Tool::Move;
     Arc::Brush brush;
     QColor backgroundColor=Qt::white;
+    Arc::GradientOptions gradientOptions;
+    int healingMode=0;
+    bool wandContiguous=true;
     std::optional<QPointF> cloneAnchor,cloneOffset,lastBrushPoint;
     bool cloneAligned=true,cloneAll=false;
     QImage cloneSample;
