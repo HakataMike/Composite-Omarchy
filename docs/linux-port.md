@@ -1,8 +1,8 @@
 # Compositor ARC for Linux
 
-The `linux/` directory contains the first C++17 / Qt 6 Widgets implementation. It runs as a native Wayland application on Omarchy. The original macOS implementation remains in `Compositor/`.
+The `linux/` directory contains the C++17 / Qt 6 Widgets implementation. It runs as a native Wayland application on Omarchy. The original macOS implementation remains in `Compositor/`.
 
-This is an early working editor, not feature parity with the macOS application.
+The core editing workflow is implemented. Remaining acceptance checks and deliberate differences are tracked in [port-parity.md](port-parity.md).
 
 ## Build, run, and test
 
@@ -27,6 +27,24 @@ Pass image filenames to import them at startup, or one `.comp` folder to open a 
 
 Qt selects its platform from the desktop environment. If needed, force native Wayland with `QT_QPA_PLATFORM=wayland ./scripts/linux-run.sh`.
 
+## Installation and packaging
+
+Install the application and launcher for your account:
+
+```sh
+./scripts/linux-install.sh
+```
+
+The default prefix is `~/.local`. A custom absolute prefix may be supplied as the first argument. The script builds the application, installs its executable, desktop entry, icon, and MIT license. This does not change your default image application.
+
+Build a distributable archive:
+
+```sh
+./scripts/linux-package.sh
+```
+
+Output: `build/releases/compositor-arc-linux-<architecture>.tar.gz` plus a SHA-256 checksum. Extract it and run `bin/compositor-arc`, or use its `scripts/linux-install.sh` without a compiler. The stripped package uses system Qt and libheif libraries; it targets current Arch/Omarchy on the build architecture and is not a self-contained or universal Linux bundle. The package README lists runtime dependencies. No Python, AI models, development objects, or test binaries are bundled.
+
 ## Background removal
 
 The Linux port deliberately omits automatic AI background removal and has no Python runtime or AI model dependency. Use the lasso or magic wand to select the background, then erase within the selection or paint black on a layer mask to hide it. Feather the selection for softer edges; masks preserve the original image pixels.
@@ -41,7 +59,7 @@ The Linux port deliberately omits automatic AI background removal and has no Pyt
 - Each stroke is one undo step. Stroke opacity is applied once across the entire stroke, including self-overlaps. Escape, focus loss, or changing tools cancels an unfinished stroke.
 - Rectangle (`M`), ellipse, freehand lasso (`L`), polygonal lasso, and magic wand (`W`) selections constrain painting and erasing in document coordinates. Drag to select; click polygon vertices and press Enter or double-click to finish. Shift adds, Alt subtracts. Wand samples the visible composite with adjustable tolerance. Use Select → Deselect (`Ctrl+D`). Escape cancels a selection drag and restores the previous selection. Selections are session-only and clear when opening a different document or changing canvas size.
 - Adjust / Filter menu: selection-limited live previews for Levels (with Auto), Curves, Hue/Saturation, Exposure, Gradient Map, Grain, Invert, Gaussian Blur, Motion Blur, Noise, and Lens Correction. Cancel restores the original image; Apply creates one undo step. Curves uses a draggable graph with per-channel points and keyboard nudging.
-- Content-aware fill uses the original C implementation on the selected image region.
+- Content-aware fill uses the original C implementation and expands the source image to cover selections outside its original bounds. Rotated/flipped layers and independently placed masks retain their placement.
 - Image menu: canvas size, image resampling/resolution, crop to selection bounds, and canvas flips. Image resampling bakes each layer transform into new source pixels.
 - Layer menu: Merge Down, Merge Layers, and Merge Folder; mask reveal/hide all, invert, and feather/blur. Feather uses a three-pass box approximation of a Gaussian.
 - Select All, Invert Selection, Select Layer Pixels (grayscale alpha coverage), Copy Merged, and Paste Image as Layer.
@@ -75,17 +93,15 @@ The loader validates IDs, transforms, sizes, filenames, asset containment, and c
 
 Rendering currently uses QPainter on the CPU and caches a full-resolution composite for display. Paint previews redraw the affected region for pixel-aligned layers and restrict brush coverage allocation to the stroke bounds. Transformed layers fall back to a full redraw to avoid Qt interpolation differences. Other layer changes still rebuild the composite synchronously. Large projects need a later tiled/dirty-region renderer and background processing. Qt's smooth image interpolation also does not yet reproduce the macOS high-quality downsampler exactly.
 
-The original C wand, levels, gradient-map, grain, noise, lens-correction, and content-fill kernels are used by the Qt build. The basic brush uses Qt rasterization; healing uses the original C kernel, while clone stamping uses Qt image composition. Painting is clipped to the canvas and the layer's existing source image bounds. Use a canvas-sized paint layer to paint outside an imported image. Pressure and feathered selection coverage are not implemented yet.
+The original C wand, levels, gradient-map, grain, noise, lens-correction, and content-fill kernels are used by the Qt build. The basic brush uses Qt rasterization; healing uses the original C kernel, while clone stamping uses Qt image composition. Painting is clipped to the canvas and the layer's existing source image bounds. Use a canvas-sized paint layer to paint outside an imported image. Feathered selection coverage is supported. Tablet pressure is not implemented.
 
 A local synthetic sample uses a 3840×2160 document with four full-size raster layers and a soft mask stroke. The original full preview averaged about 71 ms. Regional redraw and smaller brush scratch buffers reduced this to about **13 ms** (three samples, excluding UI presentation). Transformed layers still take the full redraw path. This is not a general benchmark: longer strokes, different masks, and larger documents can be slower.
 
-## Remaining port work
+## Remaining acceptance work
 
-1. Additional selection tools, unlinked/clipping masks, and grouping, with corresponding file-format support and regression tests.
-2. Adjustments, filters, text, and shape tools.
-3. Remaining retouching behavior and selection workflows. Automatic AI background removal is intentionally excluded to keep the Linux installation small.
-4. Performance profiling, tiled rendering, and acceleration where measurements justify it.
-5. Broader macOS fixture compatibility, desktop packaging, and release automation.
+The current checklist is [port-parity.md](port-parity.md). Actual macOS-generated document round trips and pixel-for-pixel Core Graphics comparisons still need a macOS test environment. Linux testing covers native schema fixtures, project persistence, and Qt editing workflows.
+
+Automatic background removal and AI object selection are deliberately excluded; use manual selections and masks. Performance work on tiled rendering remains an optimization, not a dependency of the current editor.
 
 The existing Swift/XCTest suite still requires macOS/Xcode. Linux tests do not imply that suite passes.
 

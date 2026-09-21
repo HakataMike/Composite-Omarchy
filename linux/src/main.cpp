@@ -4,10 +4,13 @@
 #include <QFileInfo>
 #include <QImageReader>
 #include <QTimer>
+#include <QIcon>
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName("Compositor ARC");
     QApplication::setOrganizationName("Compositor ARC");
+    QApplication::setDesktopFileName("compositor-arc");
+    QApplication::setWindowIcon(QIcon::fromTheme("compositor-arc"));
     QImageReader::setAllocationLimit(512);
     Workspace window; window.show();
     QTimer::singleShot(0, &window, [&] {

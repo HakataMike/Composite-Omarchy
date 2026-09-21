@@ -57,6 +57,19 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void contentFillBeyondLayerBounds() {
+        auto d=sample(); auto original=d.layers[0]; QPainterPath path; path.addRect(18,3,6,12);
+        auto changed=Arc::contentAwareFillExpanded(original,path,Arc::pathCoverage(path,d.size));
+        QCOMPARE(changed.image.size(),QSize(22,12)); QCOMPARE(changed.origin,original.origin);
+        QCOMPARE(changed.image.pixelColor(21,6),QColor(Qt::red)); QCOMPARE(changed.image.copy(0,0,16,12),original.image);
+        original.rotation=35; original.flipX=true; original.mask=QImage(1,1,QImage::Format_Grayscale8); original.mask.fill(Qt::white);
+        QPainterPath local; local.addRect(16,0,5,12); path=original.transform().map(local);
+        changed=Arc::contentAwareFillExpanded(original,path,{}); QVERIFY(changed.image.width()>=21);
+        QCOMPARE(Arc::maskTargetLayer(changed).transform(),original.transform());
+        auto oldPoint=original.transform().map(QPointF(8,6));
+        auto newPoint=changed.transform().map(QPointF(8,6)); QVERIFY(QLineF(oldPoint,newPoint).length()<0.0001);
+        d.layers[0]=changed; QTemporaryDir temp; auto file=temp.filePath("extended.comp"); Arc::saveProject(d,file); QCOMPARE(Arc::render(Arc::loadProject(file)),Arc::render(d));
+    }
     void layerDropBetweenTabs() {
         Workspace workspace; workspace.show(); auto *source=workspace.activeEditor(); source->initializeDocument(sample());
         auto *target=workspace.addDocument(); auto *tabs=workspace.findChild<QTabWidget *>("documentTabs");

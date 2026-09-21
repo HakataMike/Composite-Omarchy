@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Compositor ARC
+Comment=Layer-based image editing
+Exec=compositor-arc %F
+Icon=compositor-arc
+Terminal=false
+Categories=Graphics;RasterGraphics;2DGraphics;
+MimeType=image/png;image/jpeg;image/tiff;image/webp;image/heic;image/heif;image/avif;
+StartupNotify=true

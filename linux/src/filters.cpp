@@ -3,6 +3,8 @@
 #include "operations.h"
 #include "adjustments.h"
 #include "spatial_filters.h"
+#include "selection.h"
+#include "styles.h"
 #include <QColorSpace>
 #include <algorithm>
 #include <cmath>
@@ -151,6 +153,28 @@ QPair<int,int> autoLevels(const QImage &image,int channel) {
     while(low<254 && (sum+=bins[low])<total*0.005) ++low;
     sum=0; while(high>low+1 && (sum+=bins[high])<total*0.005) --high;
     return {low,high};
+}
+Layer contentAwareFillExpanded(const Layer &original,const QPainterPath &selection,const QImage &coverage) {
+    if(original.image.isNull() || selection.isEmpty()) throw std::runtime_error("Select an image region to fill.");
+    auto result=original; auto toPixels=documentToPixels(original,original.image.size());
+    auto extent=toPixels.map(selection).boundingRect().united(QRectF(original.image.rect()));
+    if(!std::isfinite(extent.x()) || !std::isfinite(extent.y()) || extent.width()>30000 || extent.height()>30000)
+        throw std::runtime_error("Extended fill exceeds supported image dimensions.");
+    auto snap=[](double value) { return std::abs(value-std::round(value))<1e-8 ? std::round(value) : value; };
+    extent=QRectF(QPointF(snap(extent.left()),snap(extent.top())),QPointF(snap(extent.right()),snap(extent.bottom())));
+    auto bounds=extent.toAlignedRect();
+    if(qint64(bounds.width())*bounds.height()>MaxPixels) throw std::runtime_error("Extended fill exceeds 100 megapixels.");
+    if(bounds!=original.image.rect()) {
+        QImage expanded(bounds.size(),QImage::Format_ARGB32_Premultiplied);
+        if(expanded.isNull()) throw std::runtime_error("Insufficient memory for extended fill.");
+        expanded.fill(Qt::transparent); { QPainter painter(&expanded); painter.drawImage(-bounds.topLeft(),original.image); }
+        expanded.setColorSpace(original.image.colorSpace()); result.image=expanded;
+        result.size={bounds.width()*original.size.width()/original.image.width(),bounds.height()*original.size.height()/original.image.height()};
+        auto center=toPixels.inverted().map(QRectF(bounds).center()); result.origin=center-QPointF(result.size.width()/2,result.size.height()/2);
+        if(!result.mask.isNull() && result.maskPlacement.isEmpty()) result.maskPlacement=placementOf(original);
+    }
+    auto filled=contentAwareFill(result,selection);
+    result.image=limitToSelection(result.image,filled,result,coverage); rasterize(result); return result;
 }
 QImage contentAwareFill(const Layer &layer,const QPainterPath &selection) {
     if(layer.image.isNull() || selection.isEmpty()) throw std::runtime_error("Select an image region to fill.");

@@ -20,5 +20,6 @@ FilterSettings defaultFilter(const QString &kind);
 QImage applyFilter(const QImage &image,const FilterSettings &filter);
 QImage filterLayer(const Layer &layer,const FilterSettings &filter,const std::optional<QPainterPath> &selection,bool mask);
 QPair<int,int> autoLevels(const QImage &image, int channel = 0);
+Layer contentAwareFillExpanded(const Layer &layer,const QPainterPath &selection,const QImage &coverage);
 QImage contentAwareFill(const Layer &layer,const QPainterPath &selection);
 }

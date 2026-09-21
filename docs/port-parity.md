@@ -7,7 +7,7 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 - [x] Brush/eraser, hardness, opacity, linked raster masks
 - [x] Regional painting redraw on pixel-aligned large documents (transformed layers retain exact full redraw)
 - [ ] Full v1–8 project format with fixture verification
-- [ ] Linux packaging, launcher, release build and installation instructions
+- [x] Linux packaging, launcher, stripped release archive, and installation instructions (system Qt/libheif dependencies)
 
 ## Layer workflow
 - [ ] Folders, nesting/reordering, group transforms and masks (implemented; broader physical drag/drop acceptance remains)

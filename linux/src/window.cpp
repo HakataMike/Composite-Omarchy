@@ -90,7 +90,7 @@ Window::Window() {
         auto selection=canvas->selectedPath();
         if(!selection) { statusBar()->showMessage("Select a region to fill first.",5000); return; }
         auto coverage=canvas->selectedCoverage();
-        editLayer("Content-aware fill",[&](auto &layer) { auto changed=Arc::contentAwareFill(layer,*selection); layer.image=Arc::limitToSelection(layer.image,changed,layer,coverage); Arc::rasterize(layer); });
+        editLayer("Content-aware fill",[&](auto &layer) { layer=Arc::contentAwareFillExpanded(layer,*selection,coverage); });
     });
     auto *layerMenu = menuBar()->addMenu("&Layer");
     layerMenu->addAction("Group selected layers",QKeySequence("Ctrl+G"),this,[this] {
