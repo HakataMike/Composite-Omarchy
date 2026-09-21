@@ -4,7 +4,7 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 
 ## Foundation
 - [x] Native Qt/Wayland editor, import, raster layers, basic transforms, history, PNG/JPEG export
-- [x] Brush/eraser, hardness, opacity, linked raster masks
+- [x] Brush/eraser, hardness, opacity, linked raster masks; brush expands source pixels after canvas enlargement
 - [x] Regional painting redraw on pixel-aligned large documents (transformed layers retain exact full redraw)
 - [x] Version 1–8 schema loading, hand-authored legacy fixtures, supported feature records, and save/reopen regression checks; actual Mac-generated comparisons remain below
 - [x] Linux packaging, launcher, stripped release archive, and installation instructions (system Qt/libheif dependencies)
@@ -43,7 +43,7 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 - [x] Live selection-limited previews
 
 ## Final acceptance
-- [x] Complete QtTest suite on Wayland and offscreen (68 cases); real keyboard smoke test for shortcuts, export dismissal, and quit
+- [x] Complete QtTest suite on Wayland and offscreen (69 cases); real keyboard smoke test for shortcuts, export dismissal, and quit
 - [ ] Exhaustive physical mouse/tablet acceptance for every tool and drag/drop gesture (QtTest input is widget-injected)
 - [ ] Actual macOS-generated project and cross-render comparisons (requires macOS)
 - [x] Representative multilayer project with editable text/shapes, folder, effect, and adjustment: save/reopen, PNG pixel equality, JPEG dimensions, and editor screenshot

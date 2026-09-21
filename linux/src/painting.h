@@ -10,6 +10,8 @@ struct Brush {
     double hardness = 1;
     bool eraser = false;
 };
+// Transparently pad source pixels while preserving their document placement.
+Layer expandLayerPixels(const Layer &original,const QPainterPath &area);
 // Path and clip are in document coordinates; pixels remain in layer coordinates.
 // Every preview starts from the original image so opacity applies once per stroke.
 QImage paintStroke(const Layer &original, const QPainterPath &path, const Brush &brush, QRectF clip, const QPainterPath &selection = {});

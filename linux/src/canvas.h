@@ -51,7 +51,7 @@ signals:
     void cropRequested(QRect bounds);
     void filesDropped(QStringList paths);
     void zoomChanged(double zoom);
-    void painted(int index, QImage image);
+    void painted(int index, Arc::Layer layer);
     void maskPainted(int index, QImage mask);
     void colorPicked(QColor color);
     void errorOccurred(QString message);
@@ -111,7 +111,7 @@ private:
     QImage cloneSample;
     Arc::Layer strokeOriginal;
     QPainterPath strokePath;
-    bool painting = false, selecting = false;
+    bool painting = false, selecting = false, strokePixelsChanged = false;
     QImage selectionMask, previousSelectionMask;
     bool movingSelection=false, movingPixels=false, duplicatePixels=false;
     QPointF selectionOffset;

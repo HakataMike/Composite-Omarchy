@@ -116,24 +116,34 @@ void Canvas::updateStroke(QPointF point) {
         settings.eraser = tool == Tool::Eraser;
         QRectF clip(QPointF(), document.size);
         if (selection) clip = clip.intersected(selection->boundingRect());
+        auto baseline=strokeOriginal;
+        if(tool==Tool::Brush && !maskTarget && settings.opacity>0 && settings.color.alpha()>0) {
+            double margin=settings.diameter/2+2;
+            QPainterPath affected; affected.addRect(strokePath.boundingRect().adjusted(-margin,-margin,margin,margin).intersected(clip));
+            if(selection) affected=affected.intersected(*selection);
+            baseline=Arc::expandLayerPixels(strokeOriginal,affected);
+        }
+        document.layers[dragLayer]=baseline;
+        Arc::validate(document);
         if(tool==Tool::Gradient) {
             QPointF start(strokePath.elementAt(0).x,strokePath.elementAt(0).y);
-            auto result=Arc::gradientStroke(strokeOriginal,start,point,settings,backgroundColor,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()),maskTarget,gradientOptions);
+            auto result=Arc::gradientStroke(baseline,start,point,settings,backgroundColor,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()),maskTarget,gradientOptions);
             if(maskTarget) document.layers[dragLayer].mask=result; else document.layers[dragLayer].image=result;
-        } else if(tool==Tool::Clone) document.layers[dragLayer].image=Arc::cloneStroke(strokeOriginal,cloneSample,*cloneOffset,strokePath,settings,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()));
-        else if(tool==Tool::Heal) document.layers[dragLayer].image=Arc::healStroke(strokeOriginal,strokePath,settings,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()),healingMode);
-        else if(tool==Tool::Smudge || tool==Tool::Liquify) document.layers[dragLayer].image=Arc::warpStroke(strokeOriginal,strokePath,settings,document.size,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()),tool==Tool::Smudge);
+        } else if(tool==Tool::Clone) document.layers[dragLayer].image=Arc::cloneStroke(baseline,cloneSample,*cloneOffset,strokePath,settings,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()));
+        else if(tool==Tool::Heal) document.layers[dragLayer].image=Arc::healStroke(baseline,strokePath,settings,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()),healingMode);
+        else if(tool==Tool::Smudge || tool==Tool::Liquify) document.layers[dragLayer].image=Arc::warpStroke(baseline,strokePath,settings,document.size,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()),tool==Tool::Smudge);
         else if(tool==Tool::Blur) {
-            auto result=Arc::blurStroke(strokeOriginal,strokePath,settings,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()),maskTarget);
+            auto result=Arc::blurStroke(baseline,strokePath,settings,clip,(selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()),maskTarget);
             if(maskTarget) document.layers[dragLayer].mask=result; else document.layers[dragLayer].image=result;
         }
-        else if (maskTarget) document.layers[dragLayer].mask = Arc::paintMaskStroke(strokeOriginal, strokePath, settings, clip, (selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()));
-        else document.layers[dragLayer].image = Arc::paintStroke(strokeOriginal, strokePath, settings, clip, (selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()));
+        else if (maskTarget) document.layers[dragLayer].mask = Arc::paintMaskStroke(baseline, strokePath, settings, clip, (selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()));
+        else document.layers[dragLayer].image = Arc::paintStroke(baseline, strokePath, settings, clip, (selectionMask.isNull() ? selection.value_or(QPainterPath()) : QPainterPath()));
         if(!selectionMask.isNull()) {
             auto &result=maskTarget ? document.layers[dragLayer].mask : document.layers[dragLayer].image;
-            result=Arc::limitToSelection(maskTarget ? strokeOriginal.mask : strokeOriginal.image,result,
-                maskTarget ? Arc::maskTargetLayer(strokeOriginal) : strokeOriginal,selectionMask);
+            result=Arc::limitToSelection(maskTarget ? baseline.mask : baseline.image,result,
+                maskTarget ? Arc::maskTargetLayer(baseline) : baseline,selectionMask);
         }
+        strokePixelsChanged=(maskTarget ? document.layers[dragLayer].mask!=baseline.mask : document.layers[dragLayer].image!=baseline.image);
         double radius = settings.diameter/2 + 3;
         QRect region = strokePath.boundingRect().adjusted(-radius,-radius,radius,radius).toAlignedRect()
             .intersected(QRect(QPoint(),document.size));
@@ -490,14 +500,16 @@ void Canvas::mouseReleaseEvent(QMouseEvent *event) {
         if (!painting) return;
         int index = dragLayer;
         QImage result = maskTarget ? document.layers[index].mask : document.layers[index].image;
-        bool changed = result != (maskTarget ? strokeOriginal.mask : strokeOriginal.image);
+        bool changed = strokePixelsChanged;
+        auto paintedLayer=document.layers[index];
+        if(!changed) { document.layers[index]=strokeOriginal; refreshImage(); }
         lastBrushPoint=documentPoint(event->position());
         painting = false; dragLayer = -1;
         cloneSample=QImage();
         strokeOriginal = Arc::Layer(); strokePath = QPainterPath();
         if (changed) {
             if (maskTarget) emit maskPainted(index, result);
-            else emit painted(index, result);
+            else emit painted(index, paintedLayer);
         }
         return;
     }

@@ -488,8 +488,8 @@ Window::Window() {
         edit("Move mask",[&](auto &d) { d.layers[index].maskPlacement=placement; });
     });
     connect(canvas, &Canvas::moved, this, [this](int index, QPointF point) { edit("Move layer", [=](auto &d) { auto changed=d.layers[index]; changed.origin=point; Arc::transformGroup(d,index,changed); }); });
-    connect(canvas, &Canvas::painted, this, [this](int index, const QImage &image) {
-        edit("Paint stroke", [&](auto &d) { d.layers[index].image = image; Arc::rasterize(d.layers[index]); });
+    connect(canvas, &Canvas::painted, this, [this](int index, const Arc::Layer &layer) {
+        edit("Paint stroke", [&](auto &d) { d.layers[index] = layer; Arc::rasterize(d.layers[index]); });
     });
     connect(canvas, &Canvas::maskPainted, this, [this](int index, const QImage &mask) {
         edit("Paint layer mask", [&](auto &d) { d.layers[index].mask = mask; });

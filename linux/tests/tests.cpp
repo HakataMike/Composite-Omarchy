@@ -57,6 +57,40 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void brushAfterCanvasEnlargement() {
+        for(bool centered:{false,true}) {
+            Arc::Document original; Arc::Layer layer; layer.name="Paint"; layer.size=original.size;
+            layer.image=QImage(original.size,QImage::Format_ARGB32_Premultiplied); layer.image.fill(Qt::transparent); layer.image.setColorSpace(QColorSpace::SRgb);
+            layer.image.setPixelColor(100,100,Qt::red); original.layers={layer}; original.active=0;
+            QTemporaryDir temp; auto file=temp.filePath("larger.comp"); Arc::saveProject(original,file);
+            Window window; window.show(); QVERIFY(window.openProject(file)); auto *canvas=window.findChild<Canvas *>();
+            QAction *resize=nullptr,*save=nullptr,*undo=nullptr;
+            for(auto *action:window.findChildren<QAction *>()) {
+                if(action->text()=="Canvas size…") resize=action;
+                if(action->text()=="&Save project") save=action;
+                if(action->shortcut()==QKeySequence::Undo) undo=action;
+            }
+            QVERIFY(resize && save && undo);
+            QTimer::singleShot(10,[&] {
+                auto *dialog=qobject_cast<QDialog *>(QApplication::activeModalWidget()); QVERIFY(dialog);
+                auto fields=dialog->findChildren<QSpinBox *>(); QCOMPARE(fields.size(),2); fields[0]->setValue(1920); fields[1]->setValue(1080);
+                dialog->findChild<QCheckBox *>()->setChecked(centered); dialog->accept();
+            });
+            resize->trigger(); save->trigger(); auto resized=Arc::loadProject(file); QCOMPARE(resized.size,QSize(1920,1080));
+            canvas->setTool(Canvas::Tool::Brush); Arc::Brush brush; brush.color=Qt::blue; brush.diameter=20; canvas->setBrush(brush);
+            auto point=[&](QPointF p) { return canvas->canvasToWidget(p).toPoint(); };
+            QTest::mouseClick(canvas,Qt::LeftButton,Qt::NoModifier,point({1840,1000})); save->trigger();
+            auto painted=Arc::loadProject(file); auto rendered=Arc::render(painted);
+            QCOMPARE(rendered.pixelColor(1840,1000),QColor(Qt::blue));
+            QCOMPARE(rendered.pixelColor(centered ? 420 : 100,centered ? 280 : 100),QColor(Qt::red));
+            QVERIFY(painted.layers[0].image.width()>1280); QVERIFY(painted.layers[0].image.height()>720);
+            undo->trigger(); save->trigger(); QCOMPARE(Arc::loadProject(file).layers,resized.layers);
+            QTest::mousePress(canvas,Qt::LeftButton,Qt::NoModifier,point({1840,1000})); QTest::keyClick(canvas,Qt::Key_Escape);
+            QTest::mouseRelease(canvas,Qt::LeftButton,Qt::NoModifier,point({1840,1000})); save->trigger(); QCOMPARE(Arc::loadProject(file).layers,resized.layers);
+            // Centered resize adds space on the left/top too.
+            if(centered) { QTest::mouseClick(canvas,Qt::LeftButton,Qt::NoModifier,point({40,40})); save->trigger(); QCOMPARE(Arc::render(Arc::loadProject(file)).pixelColor(40,40),QColor(Qt::blue)); }
+        }
+    }
     void representativeProjectAndExports() {
         Arc::Document d; d.size={640,420};
         Arc::Layer background; background.name="Background"; background.size=d.size; background.image=QImage(d.size,QImage::Format_ARGB32_Premultiplied);
@@ -118,7 +152,7 @@ private slots:
             QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,from); QTest::mouseMove(&canvas,to); QTest::keyClick(&canvas,Qt::Key_Escape);
             QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,to); QCOMPARE(painted.count(),0);
             QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,from); QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,to);
-            QCOMPARE(painted.count(),1); QVERIFY(qvariant_cast<QImage>(painted[0][1])!=layer.image); painted.clear();
+            QCOMPARE(painted.count(),1); QVERIFY(qvariant_cast<Arc::Layer>(painted[0][1]).image!=layer.image); painted.clear();
         }
     }
     void contentFillBeyondLayerBounds() {
@@ -346,7 +380,7 @@ private slots:
         Arc::Brush brush; brush.color=Qt::blue; brush.diameter=6; canvas.setBrush(brush); canvas.setTool(Canvas::Tool::Brush);
         QSignalSpy painted(&canvas,&Canvas::painted); auto point=[&](QPointF p) { return canvas.canvasToWidget(p).toPoint(); };
         QTest::mouseClick(&canvas,Qt::LeftButton,Qt::NoModifier,point({6.5,6.5})); QCOMPARE(painted.count(),1);
-        auto image=qvariant_cast<QImage>(painted[0][1]); QCOMPARE(image.pixelColor(4,3),QColor(127,0,128));
+        auto image=qvariant_cast<Arc::Layer>(painted[0][1]).image; QCOMPARE(image.pixelColor(4,3),QColor(127,0,128));
         canvas.setDocument(d); canvas.setTool(Canvas::Tool::Rectangle);
         QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,point({6,6})); QTest::mouseMove(&canvas,point({10,6}));
         QTest::keyClick(&canvas,Qt::Key_Escape); QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,point({10,6}));
@@ -862,13 +896,13 @@ private slots:
         QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,point({2,6}));
         QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,point({18,6}));
         QCOMPARE(painted.count(),1);
-        auto image=painted[0][1].value<QImage>();
+        auto image=painted[0][1].value<Arc::Layer>().image;
         canvas.setDocument(d); canvas.setTool(Canvas::Tool::Brush);
         Arc::Brush brush; brush.diameter=2; canvas.setBrush(brush);
         QTest::mouseClick(&canvas,Qt::LeftButton,Qt::NoModifier,point({4,8}));
         QTest::mouseClick(&canvas,Qt::LeftButton,Qt::ShiftModifier,point({14,8}));
         QCOMPARE(painted.count(),3);
-        QCOMPARE(painted.last()[1].value<QImage>().pixelColor(7,5),QColor(Qt::black));
+        QCOMPARE(painted.last()[1].value<Arc::Layer>().image.pixelColor(7,5),QColor(Qt::black));
         QVERIFY(image.pixelColor(0,3).red()<20); QVERIFY(image.pixelColor(15,3).red()>230);
     }
     void compositeAndExport() {
@@ -1043,7 +1077,7 @@ private slots:
         Arc::Brush brush; brush.color = Qt::blue; brush.diameter = 20; canvas.setBrush(brush);
         QTest::mouseClick(&canvas,Qt::LeftButton,Qt::NoModifier,point({7,7}));
         QCOMPARE(painted.size(), 1);
-        auto image = painted[0][1].value<QImage>();
+        auto image = painted[0][1].value<Arc::Layer>().image;
         QCOMPARE(image.pixelColor(5,4), QColor(Qt::blue)); // Image origin is (2,3).
         QCOMPARE(image.pixelColor(0,0), QColor(Qt::red));
         canvas.setDocument(d);
@@ -1067,7 +1101,7 @@ private slots:
         QTest::mouseMove(canvas,start+QPoint(40,0));
         QTest::mouseRelease(canvas,Qt::LeftButton,Qt::NoModifier,start+QPoint(40,0));
         QCOMPARE(painted.size(), 1);
-        auto image = painted[0][1].value<QImage>(); QVERIFY(image.pixelColor(100,100).alpha() > 0);
+        auto image = painted[0][1].value<Arc::Layer>().image; QVERIFY(image.pixelColor(100,100).alpha() > 0);
         Arc::Document d; Arc::Layer layer; layer.image = image; layer.size = image.size(); layer.name = "Paint";
         d.layers.append(layer); d.active = 0;
         auto path = temp.filePath("paint.comp"); Arc::saveProject(d,path);
