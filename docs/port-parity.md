@@ -24,7 +24,8 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 - [ ] Add/subtract/invert/feather selections; load image/mask coverage
 - [ ] Move outlines/pixels, duplicate selected pixels, clipboard
 - [ ] Transform handles, free distortion, multiple-layer transforms
-- [ ] Snapping, persistent guides, canvas flips
+- [x] Persistent guides, guide editing/locking/visibility, canvas flips
+- [ ] Snapping (layer movement implemented; resize/shape/selection snapping and rulers remain)
 - [x] Crop to selection bounds, canvas size, image size/resolution (interactive snapping crop remains)
 
 ## Tools and filters

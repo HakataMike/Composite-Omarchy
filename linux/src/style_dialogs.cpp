@@ -9,6 +9,7 @@
 #include <QFormLayout>
 #include <QJsonArray>
 #include <QLabel>
+#include <QListWidget>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QTimer>
@@ -135,4 +136,48 @@ void Window::textDialog(QRectF bounds, QColor color, bool editActive) {
             else { d.layers.insert(original.active+1,result); d.active=original.active+1; }
         });
     }
+}
+
+void Window::guidesDialog() {
+    auto original=document;
+    auto guides=document.guides;
+    QDialog dialog(this); dialog.setWindowTitle("Manage guides"); dialog.setObjectName("guidesDialog");
+    QVBoxLayout layout(&dialog);
+    QLabel hint("Guides are saved with the project and do not appear in exports.\nUse Move to drag unlocked guides; Alt bypasses guides and snapping.");
+    hint.setWordWrap(true); layout.addWidget(&hint);
+    QListWidget list; list.setObjectName("guideList"); layout.addWidget(&list);
+    QFormLayout form; layout.addLayout(&form);
+    QComboBox axis; axis.addItems({"vertical","horizontal"}); form.addRow("Axis",&axis);
+    auto *position=numeric(&form,"Position (pixels)",0,-1000000,1000000);
+    position->setObjectName("guidePosition");
+    QPushButton add("Add guide"), change("Update selected guide"), remove("Remove selected guide");
+    add.setObjectName("addGuide"); layout.addWidget(&add); layout.addWidget(&change); layout.addWidget(&remove);
+    QDialogButtonBox buttons(QDialogButtonBox::Ok|QDialogButtonBox::Cancel); layout.addWidget(&buttons);
+    auto refresh=[&] {
+        int selected=list.currentRow();
+        list.clear();
+        for(const auto &g:guides) list.addItem(g.axis+" — "+QString::number(g.position,'f',2)+" px");
+        list.setCurrentRow(std::min(selected,int(guides.size())-1));
+        add.setEnabled(guides.size()<1000);
+        auto preview=original; preview.guides=guides; canvas->setDocument(preview);
+    };
+    connect(&list,&QListWidget::currentRowChanged,&dialog,[&](int row) {
+        bool valid=row>=0 && row<guides.size(); change.setEnabled(valid); remove.setEnabled(valid);
+        if(valid) { axis.setCurrentText(guides[row].axis); position->setValue(guides[row].position); }
+    });
+    connect(&add,&QPushButton::clicked,&dialog,[&] {
+        if(guides.size()>=1000) return;
+        Arc::Guide g; g.axis=axis.currentText(); g.position=position->value(); guides.append(g);
+        refresh(); list.setCurrentRow(guides.size()-1);
+    });
+    connect(&change,&QPushButton::clicked,&dialog,[&] {
+        int row=list.currentRow(); if(row<0) return;
+        guides[row].axis=axis.currentText(); guides[row].position=position->value(); refresh();
+    });
+    connect(&remove,&QPushButton::clicked,&dialog,[&] { if(list.currentRow()>=0) { guides.removeAt(list.currentRow()); refresh(); } });
+    connect(&buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
+    connect(&buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+    refresh(); change.setEnabled(false); remove.setEnabled(false);
+    int accepted=dialog.exec(); canvas->setDocument(original);
+    if(accepted==QDialog::Accepted) edit("Edit guides",[&](auto &d) { d.guides=guides; });
 }

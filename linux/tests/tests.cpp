@@ -38,6 +38,69 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void guidesPersistTransformAndStayOutOfExports() {
+        auto d=sample(); d.size={1000,1000};
+        Arc::Guide vertical; vertical.position=60;
+        Arc::Guide horizontal; horizontal.axis="horizontal"; horizontal.position=70;
+        auto withoutGuides=Arc::render(d);
+        d.guides={vertical,horizontal};
+        QCOMPARE(Arc::render(d),withoutGuides);
+        QTemporaryDir temp; auto path=temp.filePath("guides.comp"); Arc::saveProject(d,path);
+        QCOMPARE(metadata(path)["version"].toInt(),8);
+        QCOMPARE(Arc::loadProject(path).guides,d.guides);
+        auto changed=d; changed.guides[1].id=vertical.id;
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error,Arc::saveProject(changed,path));
+        QCOMPARE(Arc::loadProject(path).guides,d.guides);
+        auto manifest=metadata(path); manifest["version"]=7; writeMetadata(path,manifest);
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error,Arc::loadProject(path));
+        Arc::crop(d,{10,20,900,900}); QCOMPARE(d.guides[0].position,50.0); QCOMPARE(d.guides[1].position,50.0);
+        Arc::resizeCanvas(d,{1100,1100},true); QCOMPARE(d.guides[0].position,150.0);
+        Arc::resizeImage(d,{550,550}); QCOMPARE(d.guides[0].position,75.0);
+        Arc::flipCanvas(d,true); QCOMPARE(d.guides[0].position,475.0); QCOMPARE(d.guides[1].position,75.0);
+        Arc::flipCanvas(d,false); QCOMPARE(d.guides[1].position,475.0);
+    }
+    void snappingAndGuideGestures() {
+        auto d=sample(); d.size={1000,1000};
+        Arc::Guide g; g.position=80; d.guides={g};
+        QCOMPARE(Arc::snapLayerOrigin(d,0,{60,300},5),QPointF(64,300));
+        QCOMPARE(Arc::snapLayerOrigin(d,0,{60,300},5,false),QPointF(60,300));
+        QCOMPARE(Arc::snapLayerOrigin(d,0,{40,300},5),QPointF(40,300));
+        d.size={100,100}; d.guides[0].position=25;
+        Canvas canvas; canvas.resize(640,480); canvas.setDocument(d); canvas.show(); canvas.fit();
+        auto point=[&](QPointF p) { return canvas.canvasToWidget(p).toPoint(); };
+        QSignalSpy moved(&canvas,&Canvas::guideMoved);
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,point({25,50}));
+        QTest::mouseMove(&canvas,point({40,50})); QTest::keyClick(&canvas,Qt::Key_Escape);
+        QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,point({40,50})); QCOMPARE(moved.count(),0);
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,point({25,50}));
+        QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,point({40,50}));
+        QCOMPARE(moved.count(),1); QVERIFY(std::abs(moved[0][1].toDouble()-40)<0.2);
+        canvas.setGuidesLocked(true);
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,point({40,50}));
+        QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,point({60,50})); QCOMPARE(moved.count(),1);
+    }
+    void guidesDialogCancelApplyAndUndo() {
+        QTemporaryDir temp; auto path=temp.filePath("guides.comp"); Arc::saveProject(sample(),path);
+        Window window; window.show(); window.openProject(path);
+        QAction *manage=nullptr,*save=nullptr,*undo=nullptr;
+        for(auto *action:window.findChildren<QAction *>()) {
+            if(action->text()=="Manage guides…") manage=action;
+            if(action->text()=="&Save project") save=action;
+            if(action->shortcut()==QKeySequence::Undo) undo=action;
+        }
+        QVERIFY(manage); QVERIFY(save); QVERIFY(undo);
+        auto addGuide=[](bool accept) {
+            auto *dialog=qobject_cast<QDialog *>(QApplication::activeModalWidget()); QVERIFY(dialog);
+            dialog->findChild<QDoubleSpinBox *>("guidePosition")->setValue(18);
+            dialog->findChild<QPushButton *>("addGuide")->click();
+            if(accept) dialog->accept(); else dialog->reject();
+        };
+        QTimer::singleShot(0,[&] { addGuide(false); }); manage->trigger(); save->trigger();
+        QVERIFY(Arc::loadProject(path).guides.isEmpty());
+        QTimer::singleShot(0,[&] { addGuide(true); }); manage->trigger(); save->trigger();
+        QCOMPARE(Arc::loadProject(path).guides.size(),1); QCOMPARE(Arc::loadProject(path).guides[0].position,18.0);
+        undo->trigger(); save->trigger(); QVERIFY(Arc::loadProject(path).guides.isEmpty());
+    }
     void editableStylesAndPersistence() {
         auto d=sample(); auto &l=d.layers[0];
         l.shape=Arc::shapeStyle("Ellipse",Qt::green); l.image=Arc::shapeImage(l.shape,l.size);

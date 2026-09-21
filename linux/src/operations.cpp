@@ -27,6 +27,7 @@ void crop(Document &d, QRect rectangle) {
     if (rectangle.isEmpty()) throw std::runtime_error("Select a crop rectangle first.");
     checkSize(rectangle.size());
     for (auto &l : d.layers) l.origin -= rectangle.topLeft();
+    for (auto &g : d.guides) g.position -= g.axis == "vertical" ? rectangle.x() : rectangle.y();
     d.size = rectangle.size(); validate(d);
 }
 void resizeCanvas(Document &d, QSize size, bool centered) {
@@ -34,6 +35,7 @@ void resizeCanvas(Document &d, QSize size, bool centered) {
     if (centered) {
         QPointF delta((size.width()-d.size.width())/2.0,(size.height()-d.size.height())/2.0);
         for (auto &l : d.layers) l.origin += delta;
+        for (auto &g : d.guides) g.position += g.axis == "vertical" ? delta.x() : delta.y();
     }
     d.size = size; validate(d);
 }
@@ -56,7 +58,42 @@ void resizeImage(Document &d, QSize size) {
         if (!l.mask.isNull()) l.mask = transformedImage(l.mask,l.size,mapping,bounds,true);
         l.origin = bounds.topLeft(); l.size = bounds.size(); l.rotation = 0; l.flipX = l.flipY = false;
     }
+    for (auto &g : d.guides) g.position *= g.axis == "vertical" ? sx : sy;
     d.size = size; validate(d);
+}
+void flipCanvas(Document &d, bool horizontal) {
+    for (auto &l : d.layers) {
+        if (horizontal) { l.origin.setX(d.size.width()-l.origin.x()-l.size.width()); l.flipX=!l.flipX; }
+        else { l.origin.setY(d.size.height()-l.origin.y()-l.size.height()); l.flipY=!l.flipY; }
+        l.rotation=-l.rotation;
+    }
+    for (auto &g : d.guides) if ((g.axis=="vertical")==horizontal)
+        g.position=(horizontal ? d.size.width() : d.size.height())-g.position;
+    validate(d);
+}
+QPointF snapLayerOrigin(const Document &d, int index, QPointF origin, double tolerance, bool guides) {
+    if (index < 0 || index >= d.layers.size() || tolerance <= 0) return origin;
+    auto moved=d.layers[index]; moved.origin=origin;
+    auto bounds=moved.transform().mapRect(QRectF(QPointF(),moved.size));
+    QVector<double> xs{0, d.size.width()/2.0, double(d.size.width())};
+    QVector<double> ys{0, d.size.height()/2.0, double(d.size.height())};
+    if (guides) for (const auto &g : d.guides) {
+        if(g.axis=="vertical") xs.append(g.position); else ys.append(g.position);
+    }
+    for(int i=0;i<d.layers.size();++i) if(i!=index && d.layers[i].visible) {
+        const auto &l=d.layers[i]; auto r=l.transform().mapRect(QRectF(QPointF(),l.size));
+        xs << r.left() << r.center().x() << r.right();
+        ys << r.top() << r.center().y() << r.bottom();
+    }
+    auto nearest=[&](const QVector<double> &targets, std::initializer_list<double> edges) {
+        double distance=tolerance, correction=0;
+        for(double edge:edges) for(double target:targets) if(std::abs(target-edge)<distance) {
+            correction=target-edge; distance=std::abs(correction);
+        }
+        return correction;
+    };
+    return origin+QPointF(nearest(xs,{bounds.left(),bounds.center().x(),bounds.right()}),
+        nearest(ys,{bounds.top(),bounds.center().y(),bounds.bottom()}));
 }
 void mergeDown(Document &d) {
     if (d.active <= 0) throw std::runtime_error("Select a layer with another layer beneath it.");

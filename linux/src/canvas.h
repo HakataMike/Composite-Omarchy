@@ -12,6 +12,9 @@ public:
     void setTool(Tool tool);
     void setBrush(const Arc::Brush &brush);
     void setMaskTarget(bool enabled);
+    void setGuidesVisible(bool enabled);
+    void setGuidesLocked(bool enabled);
+    void setSnapping(bool enabled);
     void clearSelection();
     void setSelection(const QPainterPath &path);
     std::optional<QPainterPath> selectedPath() const { return selection; }
@@ -26,6 +29,7 @@ public:
 signals:
     void selected(int index);
     void moved(int index, QPointF origin);
+    void guideMoved(int index, double position);
     void filesDropped(QStringList paths);
     void zoomChanged(double zoom);
     void painted(int index, QImage image);
@@ -57,6 +61,9 @@ private:
     void updateDraft(QPointF point, Qt::KeyboardModifiers modifiers);
     bool space = false, panning = false, dragging = false;
     int dragLayer = -1;
+    bool guidesVisible = true, guidesLocked = false, snapping = false;
+    int dragGuide = -1;
+    double originalGuidePosition = 0;
     Tool tool = Tool::Move;
     Arc::Brush brush;
     QColor backgroundColor=Qt::white;

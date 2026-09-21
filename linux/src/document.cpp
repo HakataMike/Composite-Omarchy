@@ -76,7 +76,7 @@ bool Layer::operator==(const Layer &o) const {
         && opacity == o.opacity && blend == o.blend && sampling == o.sampling;
 }
 bool Document::operator==(const Document &o) const {
-    return id == o.id && size == o.size && resolution == o.resolution && layers == o.layers && active == o.active;
+    return id == o.id && size == o.size && resolution == o.resolution && layers == o.layers && active == o.active && guides == o.guides;
 }
 QTransform Layer::transform() const {
     QTransform t;
@@ -90,6 +90,14 @@ void validate(const Document &d) {
     require(!d.id.isNull() && validSize(d.size), "Canvas exceeds the 30,000-side or 100-megapixel limit.");
     require(std::isfinite(d.resolution) && d.resolution >= 1 && d.resolution <= 9600, "Invalid resolution.");
     require(d.layers.size() <= 10000 && d.active >= -1 && d.active < d.layers.size(), "Invalid layer list.");
+    require(d.guides.size() <= 1000, "Too many guides (maximum 1,000).");
+    QSet<QUuid> guideIds;
+    for (const auto &guide : d.guides) {
+        require(!guide.id.isNull() && !guideIds.contains(guide.id)
+            && (guide.axis == "horizontal" || guide.axis == "vertical")
+            && std::isfinite(guide.position) && std::abs(guide.position) <= 1000000, "Invalid guide.");
+        guideIds.insert(guide.id);
+    }
     QSet<QUuid> ids;
     qint64 pixels = 0, maskPixels = 0;
     for (const auto &l : d.layers) {
@@ -236,10 +244,21 @@ Document loadProject(const QString &path) {
     require(m["format"] == "com.compositor.project", "Not a Compositor project.");
     int version = integer(m["version"]);
     require(version >= 1 && version <= 8, "Unsupported project version (expected v1–8).");
-    keys(m, {"format", "version", "colorSpace", "resolution", "documentID", "width", "height", "activeLayerID", "layers"});
+    keys(m, {"format", "version", "colorSpace", "resolution", "documentID", "width", "height", "activeLayerID", "layers", "guides"});
     require(m["colorSpace"] == "sRGB" && m["layers"].isArray(), "Invalid project metadata.");
     Document d;
     d.id = uuid(m["documentID"]);
+    if (m.contains("guides") && !m["guides"].isNull()) {
+        require(m["guides"].isArray() && m["guides"].toArray().size() <= 1000, "Invalid guide list.");
+        auto guides = m["guides"].toArray();
+        require(version >= 8 || guides.isEmpty(), "Guides require project version 8.");
+        for (const auto &value : guides) {
+            require(value.isObject(), "Invalid guide record.");
+            auto record = value.toObject(); keys(record, {"id", "axis", "position"});
+            Guide guide; guide.id = uuid(record["id"]); guide.axis = record["axis"].toString();
+            guide.position = number(record["position"]); d.guides.append(guide);
+        }
+    }
     d.size = QSize(integer(m["width"]), integer(m["height"]));
     if (m.contains("resolution")) d.resolution = number(m["resolution"]);
     validate(d);
@@ -369,6 +388,11 @@ void saveProject(const Document &d, const QString &path) {
     QJsonObject manifest{{"format", "com.compositor.project"}, {"version", version}, {"colorSpace", "sRGB"},
         {"documentID", idString(d.id)}, {"width", d.size.width()}, {"height", d.size.height()},
         {"resolution", d.resolution}, {"layers", layers}};
+    if (!d.guides.isEmpty()) {
+        QJsonArray guides;
+        for (const auto &g : d.guides) guides.append(QJsonObject{{"id", idString(g.id)}, {"axis", g.axis}, {"position", g.position}});
+        manifest["guides"] = guides; manifest["version"] = 8;
+    }
     if (d.active >= 0) manifest["activeLayerID"] = idString(d.layers[d.active].id);
     QByteArray bytes = QJsonDocument(manifest).toJson();
     require(bytes.size() <= 4 * 1024 * 1024, "Project manifest exceeds 4 MiB.");

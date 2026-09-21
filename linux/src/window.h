@@ -42,6 +42,7 @@ private:
     void resizeDialog(bool resample);
     void filterDialog(const QString &kind);
     void shapeDialog();
+    void guidesDialog();
     void textDialog(QRectF bounds = {}, QColor color = Qt::black, bool editActive = false);
     void exportDialog();
     void chooseProject();

@@ -1,6 +1,7 @@
 #include "canvas.h"
 #include "selection.h"
 #include "retouch.h"
+#include "operations.h"
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QKeyEvent>
@@ -30,6 +31,9 @@ void Canvas::setTool(Tool value) {
 }
 void Canvas::setBrush(const Arc::Brush &value) { cancelGesture(); brush = value; update(); }
 void Canvas::setMaskTarget(bool enabled) { cancelGesture(); maskTarget = enabled; }
+void Canvas::setGuidesVisible(bool enabled) { cancelGesture(); guidesVisible=enabled; update(); }
+void Canvas::setGuidesLocked(bool enabled) { cancelGesture(); guidesLocked=enabled; }
+void Canvas::setSnapping(bool enabled) { cancelGesture(); snapping=enabled; }
 void Canvas::clearSelection() { cancelGesture(); selection.reset(); update(); }
 void Canvas::setSelection(const QPainterPath &path) { cancelGesture(); selection=path; update(); }
 void Canvas::combineSelection(const QPainterPath &path) {
@@ -124,6 +128,15 @@ void Canvas::paintEvent(QPaintEvent *) {
             p.restore();
         }
     }
+    if(guidesVisible) {
+        p.save(); p.setClipRect(bounds);
+        QPen guidePen(QColor(0,220,240),1); guidePen.setCosmetic(true); p.setPen(guidePen);
+        for(const auto &g : document.guides) {
+            if(g.axis=="vertical") p.drawLine(QPointF(g.position,0),QPointF(g.position,document.size.height()));
+            else p.drawLine(QPointF(0,g.position),QPointF(document.size.width(),g.position));
+        }
+        p.restore();
+    }
     if(drafting) {
         QPen pen(brush.color,tool==Tool::ShapeLine ? 4 : 1); pen.setCosmetic(tool!=Tool::ShapeLine);
         p.setPen(pen); p.setBrush(tool==Tool::Text ? QBrush(Qt::NoBrush) : QBrush(brush.color));
@@ -154,6 +167,17 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
         panning = true; setCursor(Qt::ClosedHandCursor); return;
     }
     if (event->button() != Qt::LeftButton) return;
+    if(tool==Tool::Move && guidesVisible && !guidesLocked && !(event->modifiers() & Qt::AltModifier)
+        && QRectF(QPointF(),document.size).contains(documentPoint(event->position()))) {
+        auto point=documentPoint(event->position());
+        double distance=5/zoom;
+        for(int i=0;i<document.guides.size();++i) {
+            const auto &g=document.guides[i];
+            double candidate=std::abs((g.axis=="vertical" ? point.x() : point.y())-g.position);
+            if(candidate<distance) { dragGuide=i; distance=candidate; }
+        }
+        if(dragGuide>=0) { originalGuidePosition=document.guides[dragGuide].position; return; }
+    }
     if(tool==Tool::ShapeRectangle || tool==Tool::ShapeEllipse || tool==Tool::ShapeLine || tool==Tool::Text) {
         drafting=true; draftAnchor=documentPoint(event->position());
         updateDraft(draftAnchor,event->modifiers()); return;
@@ -236,6 +260,10 @@ void Canvas::mouseMoveEvent(QMouseEvent *event) {
     pointerPosition = event->position();
     update();
     if (panning) { offset = originalOffset + event->position() - pressPoint; update(); }
+    else if (dragGuide>=0) {
+        auto &g=document.guides[dragGuide]; auto point=documentPoint(event->position());
+        g.position=std::clamp(g.axis=="vertical" ? point.x() : point.y(),-1000000.0,1000000.0); update();
+    }
     else if (drafting) updateDraft(documentPoint(event->position()),event->modifiers());
     else if (painting) updateStroke(documentPoint(event->position()));
     else if (selecting) updateSelection(documentPoint(event->position()));
@@ -245,6 +273,13 @@ void Canvas::mouseMoveEvent(QMouseEvent *event) {
             if (std::abs(delta.x()) > std::abs(delta.y())) delta.setY(0); else delta.setX(0);
         }
         auto point = originalOrigin + delta;
+        if(snapping && !(event->modifiers() & Qt::AltModifier)) {
+            auto snapped=Arc::snapLayerOrigin(document,dragLayer,point,6/zoom,guidesVisible);
+            if(event->modifiers() & Qt::ShiftModifier) {
+                if(delta.y()==0) snapped.setY(originalOrigin.y()); else snapped.setX(originalOrigin.x());
+            }
+            point=snapped;
+        }
         document.layers[dragLayer].origin = {std::clamp(point.x(), -1000000.0, 1000000.0), std::clamp(point.y(), -1000000.0, 1000000.0)};
         refreshImage();
     }
@@ -264,6 +299,13 @@ void Canvas::updateDraft(QPointF point, Qt::KeyboardModifiers modifiers) {
     draftEnd=draftAnchor+delta; update();
 }
 void Canvas::mouseReleaseEvent(QMouseEvent *event) {
+    if(dragGuide>=0 && event->button()==Qt::LeftButton) {
+        auto index=dragGuide; auto &g=document.guides[index]; auto point=documentPoint(event->position());
+        double position=std::clamp(g.axis=="vertical" ? point.x() : point.y(),-1000000.0,1000000.0);
+        g.position=position; dragGuide=-1; update();
+        if(position!=originalGuidePosition) emit guideMoved(index,position);
+        return;
+    }
     if(drafting && event->button()==Qt::LeftButton) {
         updateDraft(documentPoint(event->position()),event->modifiers()); drafting=false; update();
         if(tool==Tool::Text) emit textRequested(QRectF(draftStart,draftEnd).normalized(),brush.color);
@@ -299,6 +341,7 @@ void Canvas::mouseReleaseEvent(QMouseEvent *event) {
         panning = false; unsetCursor();
     }
     if (dragging && event->button() == Qt::LeftButton) {
+        mouseMoveEvent(event);
         auto index = dragLayer; auto point = document.layers[index].origin;
         dragging = false; dragLayer = -1;
         if (point != originalOrigin) emit moved(index, point);
@@ -311,6 +354,7 @@ void Canvas::wheelEvent(QWheelEvent *event) {
     offset = event->position() - anchor*zoom; emit zoomChanged(zoom); update(); event->accept();
 }
 void Canvas::cancelGesture() {
+    if(dragGuide>=0) { document.guides[dragGuide].position=originalGuidePosition; dragGuide=-1; update(); }
     if(drafting) { drafting=false; update(); }
     if (painting) {
         document.layers[dragLayer] = strokeOriginal;

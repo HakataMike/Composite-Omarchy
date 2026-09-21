@@ -23,11 +23,18 @@ struct Layer {
     QTransform transform() const;
     bool operator==(const Layer &other) const;
 };
+struct Guide {
+    QUuid id = QUuid::createUuid();
+    QString axis = "vertical";
+    double position = 0;
+    bool operator==(const Guide &o) const { return id == o.id && axis == o.axis && position == o.position; }
+};
 struct Document {
     QUuid id = QUuid::createUuid();
     QSize size = {1280, 720};
     double resolution = 72;
     QVector<Layer> layers; // Bottom to top, matching the macOS format.
+    QVector<Guide> guides;
     int active = -1;
     bool operator==(const Document &other) const;
 };

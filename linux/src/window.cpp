@@ -73,16 +73,8 @@ Window::Window() {
         if (selection) edit("Crop canvas",[&](auto &d) { Arc::crop(d,selection->toAlignedRect()); });
         else statusBar()->showMessage("Make a rectangular selection to crop the canvas.",5000);
     });
-    imageMenu->addAction("Flip canvas horizontally",this,[this] {
-        edit("Flip canvas horizontally",[](auto &d) { for (auto &l : d.layers) {
-            l.origin.setX(d.size.width()-l.origin.x()-l.size.width()); l.rotation=-l.rotation; l.flipX=!l.flipX;
-        }});
-    });
-    imageMenu->addAction("Flip canvas vertically",this,[this] {
-        edit("Flip canvas vertically",[](auto &d) { for (auto &l : d.layers) {
-            l.origin.setY(d.size.height()-l.origin.y()-l.size.height()); l.rotation=-l.rotation; l.flipY=!l.flipY;
-        }});
-    });
+    imageMenu->addAction("Flip canvas horizontally",this,[this] { edit("Flip canvas horizontally",[](auto &d) { Arc::flipCanvas(d,true); }); });
+    imageMenu->addAction("Flip canvas vertically",this,[this] { edit("Flip canvas vertically",[](auto &d) { Arc::flipCanvas(d,false); }); });
     auto *filterMenu=menuBar()->addMenu("&Adjust / Filter");
     for(const auto &name:Arc::filterNames()) filterMenu->addAction(name+"…",this,[this,name] { filterDialog(name); });
     filterMenu->addSeparator();
@@ -107,6 +99,14 @@ Window::Window() {
         if (ok) editLayer("Feather layer mask",[=](auto &l) { l.mask=Arc::blurImage(l.mask,radius); });
     });
     auto *view = menuBar()->addMenu("&View");
+    view->addAction("Manage guides…",this,&Window::guidesDialog);
+    auto *showGuides=view->addAction("Show guides"); showGuides->setCheckable(true); showGuides->setChecked(true);
+    connect(showGuides,&QAction::toggled,canvas,&Canvas::setGuidesVisible);
+    auto *lockGuides=view->addAction("Lock guides"); lockGuides->setCheckable(true);
+    connect(lockGuides,&QAction::toggled,canvas,&Canvas::setGuidesLocked);
+    auto *snap=view->addAction("Snap to guides, canvas and layers"); snap->setCheckable(true);
+    connect(snap,&QAction::toggled,canvas,&Canvas::setSnapping);
+    view->addSeparator();
     auto *fit = view->addAction("Fit canvas", QKeySequence("Ctrl+0"), canvas, &Canvas::fit);
     view->addAction("Zoom in", QKeySequence::ZoomIn, this, [this] { canvas->zoomBy(1.25); });
     view->addAction("Zoom out", QKeySequence::ZoomOut, this, [this] { canvas->zoomBy(0.8); });
@@ -330,6 +330,9 @@ Window::Window() {
     });
     connect(canvas, &Canvas::textRequested, this, [this](QRectF bounds,QColor color) { textDialog(bounds,color); });
     connect(canvas, &Canvas::selected, this, [this](int index) { document.active = index; refresh(); });
+    connect(canvas, &Canvas::guideMoved, this, [this](int index,double position) {
+        edit("Move guide",[=](auto &d) { d.guides[index].position=position; });
+    });
     connect(canvas, &Canvas::moved, this, [this](int index, QPointF point) { edit("Move layer", [=](auto &d) { d.layers[index].origin = point; }); });
     connect(canvas, &Canvas::painted, this, [this](int index, const QImage &image) {
         edit("Paint stroke", [&](auto &d) { d.layers[index].image = image; Arc::rasterize(d.layers[index]); });
