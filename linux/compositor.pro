@@ -12,3 +12,5 @@ SOURCES += src/selection.cpp ../Compositor/Rendering/WandPixels.c
 HEADERS += src/selection.h
 SOURCES += src/filters.cpp ../Compositor/Rendering/AdjustPixels.c ../Compositor/Rendering/LevelsPixels.c ../Compositor/Rendering/NoisePixels.c ../Compositor/Rendering/LensPixels.c ../Compositor/Rendering/ContentFill.c
 HEADERS += src/filters.h
+SOURCES += src/retouch.cpp ../Compositor/Rendering/HealPixels.c
+HEADERS += src/retouch.h

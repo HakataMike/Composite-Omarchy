@@ -7,7 +7,7 @@
 class Canvas : public QWidget {
     Q_OBJECT
 public:
-    enum class Tool { Move, Brush, Eraser, Rectangle, Ellipse, Lasso, Polygon, Wand };
+    enum class Tool { Move, Brush, Eraser, Rectangle, Ellipse, Lasso, Polygon, Wand, Eyedropper, Gradient, Clone, Heal, Blur };
     explicit Canvas(QWidget *parent = nullptr);
     void setTool(Tool tool);
     void setBrush(const Arc::Brush &brush);
@@ -15,6 +15,8 @@ public:
     void clearSelection();
     void setSelection(const QPainterPath &path);
     std::optional<QPainterPath> selectedPath() const { return selection; }
+    void setBackgroundColor(QColor color) { backgroundColor=color; }
+    void setCloneOptions(bool aligned,bool allLayers) { cloneAligned=aligned; cloneAll=allLayers; }
     void setWandTolerance(int value) { wandTolerance = value; }
     std::optional<QRectF> selectionBounds() const { return selection ? std::optional<QRectF>(selection->boundingRect()) : std::nullopt; }
     void setDocument(const Arc::Document &document);
@@ -28,6 +30,7 @@ signals:
     void zoomChanged(double zoom);
     void painted(int index, QImage image);
     void maskPainted(int index, QImage mask);
+    void colorPicked(QColor color);
     void errorOccurred(QString message);
 protected:
     void paintEvent(QPaintEvent *) override;
@@ -51,6 +54,10 @@ private:
     int dragLayer = -1;
     Tool tool = Tool::Move;
     Arc::Brush brush;
+    QColor backgroundColor=Qt::white;
+    std::optional<QPointF> cloneAnchor,cloneOffset,lastBrushPoint;
+    bool cloneAligned=true,cloneAll=false;
+    QImage cloneSample;
     Arc::Layer strokeOriginal;
     QPainterPath strokePath;
     bool painting = false, selecting = false;

@@ -29,6 +29,7 @@
 #include <QSpinBox>
 #include <QStatusBar>
 #include <QToolBar>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <stdexcept>
 
@@ -140,12 +141,17 @@ Window::Window() {
     addToolBarBreak();
     auto *tools = addToolBar("Painting"); tools->setMovable(false);
     auto *toolGroup = new QActionGroup(this);
+    auto *toolMenu = new QMenu(this);
+    auto *toolButton = new QToolButton;
+    toolButton->setText("Move (V)"); toolButton->setMenu(toolMenu);
+    toolButton->setPopupMode(QToolButton::InstantPopup);
+    toolButton->setAccessibleName("Active tool"); tools->addWidget(toolButton);
     auto addTool = [&](QString label, QString shortcut, Canvas::Tool mode) {
-        auto *action = tools->addAction(label);
+        auto *action = toolMenu->addAction(label);
         action->setCheckable(true); toolGroup->addAction(action);
         action->setShortcut(QKeySequence(shortcut));
         action->setShortcutContext(Qt::WidgetShortcut); canvas->addAction(action);
-        connect(action, &QAction::triggered, this, [this, mode] { canvas->setTool(mode); canvas->setFocus(); });
+        connect(action, &QAction::triggered, this, [this, mode, toolButton, label] { toolButton->setText(label); canvas->setTool(mode); canvas->setFocus(); });
         return action;
     };
     addTool("Move (V)", "V", Canvas::Tool::Move)->setChecked(true);
@@ -156,6 +162,21 @@ Window::Window() {
     addTool("Lasso (L)", "L", Canvas::Tool::Lasso);
     addTool("Polygon", "", Canvas::Tool::Polygon);
     addTool("Wand (W)", "W", Canvas::Tool::Wand);
+    addTool("Eyedropper (I)", "I", Canvas::Tool::Eyedropper);
+    addTool("Gradient (G)", "G", Canvas::Tool::Gradient);
+    addTool("Clone stamp (S)", "S", Canvas::Tool::Clone);
+    addTool("Healing (J)", "J", Canvas::Tool::Heal);
+    addTool("Blur brush", "", Canvas::Tool::Blur);
+    auto *optionsMenu = new QMenu(this);
+    auto *aligned = optionsMenu->addAction("Aligned clone source");
+    aligned->setCheckable(true); aligned->setChecked(true);
+    auto *allLayers = optionsMenu->addAction("Clone from all visible layers");
+    allLayers->setCheckable(true);
+    auto cloneOptions = [this, aligned, allLayers] { canvas->setCloneOptions(aligned->isChecked(), allLayers->isChecked()); };
+    connect(aligned, &QAction::toggled, this, cloneOptions);
+    connect(allLayers, &QAction::toggled, this, cloneOptions);
+    auto *options = new QToolButton; options->setText("Options"); options->setMenu(optionsMenu);
+    options->setPopupMode(QToolButton::InstantPopup); tools->addWidget(options);
     auto *tolerance=new QSpinBox; tolerance->setRange(0,255); tolerance->setValue(32);
     tolerance->setPrefix("Tolerance "); tolerance->setAccessibleName("Magic wand tolerance"); tools->addWidget(tolerance);
     connect(tolerance,&QSpinBox::valueChanged,canvas,&Canvas::setWandTolerance);
@@ -170,6 +191,15 @@ Window::Window() {
     connect(color, &QAction::triggered, this, [this, settings, updateColorIcon] {
         auto chosen = QColorDialog::getColor(settings->color, this, "Paint color");
         if (chosen.isValid()) { settings->color = chosen; updateColorIcon(); canvas->setBrush(*settings); }
+    });
+    connect(canvas, &Canvas::colorPicked, this, [this, settings, updateColorIcon](QColor picked) {
+        settings->color = picked; updateColorIcon(); canvas->setBrush(*settings);
+    });
+    auto background = std::make_shared<QColor>(Qt::white);
+    auto *backgroundAction = optionsMenu->addAction("Gradient end color…");
+    connect(backgroundAction, &QAction::triggered, this, [this, background] {
+        auto chosen = QColorDialog::getColor(*background, this, "Gradient end color");
+        if(chosen.isValid()) { *background = chosen; canvas->setBackgroundColor(chosen); }
     });
     auto *black = tools->addAction("Black");
     auto *white = tools->addAction("White");

@@ -1,5 +1,6 @@
 #include "canvas.h"
 #include "selection.h"
+#include "retouch.h"
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QKeyEvent>
@@ -19,7 +20,7 @@ Canvas::Canvas(QWidget *parent) : QWidget(parent) {
 }
 void Canvas::setDocument(const Arc::Document &d) {
     cancelGesture();
-    if (document.id != d.id || document.size != d.size) selection.reset();
+    if (document.id != d.id || document.size != d.size) { selection.reset(); cloneAnchor.reset(); cloneOffset.reset(); lastBrushPoint.reset(); }
     document = d; refreshImage();
 }
 void Canvas::setTool(Tool value) {
@@ -59,11 +60,22 @@ void Canvas::updateStroke(QPointF point) {
         settings.eraser = tool == Tool::Eraser;
         QRectF clip(QPointF(), document.size);
         if (selection) clip = clip.intersected(selection->boundingRect());
-        if (maskTarget) document.layers[dragLayer].mask = Arc::paintMaskStroke(strokeOriginal, strokePath, settings, clip, selection.value_or(QPainterPath()));
+        if(tool==Tool::Gradient) {
+            QPointF start(strokePath.elementAt(0).x,strokePath.elementAt(0).y);
+            auto result=Arc::gradientStroke(strokeOriginal,start,point,settings,backgroundColor,clip,selection.value_or(QPainterPath()),maskTarget);
+            if(maskTarget) document.layers[dragLayer].mask=result; else document.layers[dragLayer].image=result;
+        } else if(tool==Tool::Clone) document.layers[dragLayer].image=Arc::cloneStroke(strokeOriginal,cloneSample,*cloneOffset,strokePath,settings,clip,selection.value_or(QPainterPath()));
+        else if(tool==Tool::Heal) document.layers[dragLayer].image=Arc::healStroke(strokeOriginal,strokePath,settings,clip,selection.value_or(QPainterPath()));
+        else if(tool==Tool::Blur) {
+            auto result=Arc::blurStroke(strokeOriginal,strokePath,settings,clip,selection.value_or(QPainterPath()),maskTarget);
+            if(maskTarget) document.layers[dragLayer].mask=result; else document.layers[dragLayer].image=result;
+        }
+        else if (maskTarget) document.layers[dragLayer].mask = Arc::paintMaskStroke(strokeOriginal, strokePath, settings, clip, selection.value_or(QPainterPath()));
         else document.layers[dragLayer].image = Arc::paintStroke(strokeOriginal, strokePath, settings, clip, selection.value_or(QPainterPath()));
         double radius = settings.diameter/2 + 3;
         QRect region = strokePath.boundingRect().adjusted(-radius,-radius,radius,radius).toAlignedRect()
             .intersected(QRect(QPoint(),document.size));
+        if(tool==Tool::Gradient) region=clip.toAlignedRect().intersected(QRect(QPoint(),document.size));
         if (!region.isEmpty()) {
             Arc::repaintRegion(composite,document,region);
         }
@@ -118,7 +130,7 @@ void Canvas::paintEvent(QPaintEvent *) {
         QPen black(Qt::black, 1, Qt::DashLine); black.setCosmetic(true);
         p.setPen(black); p.drawPath(*selection);
     }
-    if (underMouse() && !panning && (tool == Tool::Brush || tool == Tool::Eraser)) {
+    if (underMouse() && !panning && (tool == Tool::Brush || tool == Tool::Eraser || tool == Tool::Clone || tool == Tool::Heal || tool == Tool::Blur)) {
         QPointF center = documentPoint(pointerPosition);
         QPen white(Qt::white, 2); white.setCosmetic(true);
         p.setBrush(Qt::NoBrush); p.setPen(white); p.drawEllipse(center, brush.diameter/2, brush.diameter/2);
@@ -133,6 +145,15 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
         panning = true; setCursor(Qt::ClosedHandCursor); return;
     }
     if (event->button() != Qt::LeftButton) return;
+    if(tool==Tool::Eyedropper) {
+        auto sample=documentPoint(event->position());
+        QPoint point(std::floor(sample.x()),std::floor(sample.y()));
+        if(composite.rect().contains(point)) emit colorPicked(composite.pixelColor(point));
+        return;
+    }
+    if(tool==Tool::Clone && (event->modifiers() & Qt::AltModifier)) {
+        cloneAnchor=documentPoint(event->position()); cloneOffset.reset(); return;
+    }
     if (tool == Tool::Wand) {
         previousSelection=selection;
         selectionOperation=(event->modifiers() & Qt::AltModifier) ? 2 : (event->modifiers() & Qt::ShiftModifier) ? 1 : 0;
@@ -154,7 +175,7 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
         updateSelection(point);
         return;
     }
-    if (tool == Tool::Brush || tool == Tool::Eraser) {
+    if (tool == Tool::Brush || tool == Tool::Eraser || tool==Tool::Gradient || tool==Tool::Clone || tool==Tool::Heal || tool==Tool::Blur) {
         int index = document.active;
         if (index < 0 || document.layers[index].image.isNull() || !document.layers[index].visible) {
             emit errorOccurred("Select a visible image layer, or add a paint layer, before painting.");
@@ -164,9 +185,19 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
             emit errorOccurred("Add and enable the layer mask before painting it.");
             return;
         }
+        if(maskTarget && (tool==Tool::Clone || tool==Tool::Heal)) { emit errorOccurred("Clone and healing tools edit image pixels. Choose Paint image first."); return; }
+        if(tool==Tool::Clone) {
+            if(!cloneAnchor) { emit errorOccurred("Alt-click to choose the clone source first."); return; }
+            if(!cloneAligned || !cloneOffset) cloneOffset=*cloneAnchor-documentPoint(event->position());
+            try {
+            if(cloneAll) cloneSample=composite;
+            else { auto single=document; single.layers={document.layers[index]}; single.active=0; single.layers[0].opacity=1; single.layers[0].blend="Normal"; single.layers[0].maskEnabled=false; cloneSample=Arc::render(single); }
+            } catch(const std::exception &error) { cloneSample=QImage(); emit errorOccurred(QString::fromUtf8(error.what())); return; }
+        }
         dragLayer = index;
         strokeOriginal = document.layers[index];
         strokePath = QPainterPath();
+        if(lastBrushPoint && (event->modifiers() & Qt::ShiftModifier) && (tool==Tool::Brush || tool==Tool::Eraser)) strokePath.moveTo(*lastBrushPoint);
         painting = true;
         updateStroke(documentPoint(event->position()));
         return;
@@ -211,7 +242,9 @@ void Canvas::mouseReleaseEvent(QMouseEvent *event) {
         int index = dragLayer;
         QImage result = maskTarget ? document.layers[index].mask : document.layers[index].image;
         bool changed = result != (maskTarget ? strokeOriginal.mask : strokeOriginal.image);
+        lastBrushPoint=documentPoint(event->position());
         painting = false; dragLayer = -1;
+        cloneSample=QImage();
         strokeOriginal = Arc::Layer(); strokePath = QPainterPath();
         if (changed) {
             if (maskTarget) emit maskPainted(index, result);
@@ -246,6 +279,7 @@ void Canvas::cancelGesture() {
     if (painting) {
         document.layers[dragLayer] = strokeOriginal;
         painting = false; dragLayer = -1;
+        cloneSample=QImage();
         strokeOriginal = Arc::Layer(); strokePath = QPainterPath();
         refreshImage();
     }

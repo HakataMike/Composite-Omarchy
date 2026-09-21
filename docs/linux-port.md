@@ -71,7 +71,7 @@ The loader validates IDs, transforms, sizes, filenames, asset containment, and c
 
 Rendering currently uses QPainter on the CPU and caches a full-resolution composite for display. Paint previews redraw the affected region for pixel-aligned layers and restrict brush coverage allocation to the stroke bounds. Transformed layers fall back to a full redraw to avoid Qt interpolation differences. Other layer changes still rebuild the composite synchronously. Large projects need a later tiled/dirty-region renderer and background processing. Qt's smooth image interpolation also does not yet reproduce the macOS high-quality downsampler exactly.
 
-The original C wand, levels, gradient-map, grain, noise, lens-correction, and content-fill kernels are used by the Qt build. The basic brush uses Qt rasterization; healing and clone-stamp tools remain to be connected. Painting is clipped to the canvas and the layer's existing source image bounds. Use a canvas-sized paint layer to paint outside an imported image. Pressure and feathered selection coverage are not implemented yet.
+The original C wand, levels, gradient-map, grain, noise, lens-correction, and content-fill kernels are used by the Qt build. The basic brush uses Qt rasterization; healing uses the original C kernel, while clone stamping uses Qt image composition. Painting is clipped to the canvas and the layer's existing source image bounds. Use a canvas-sized paint layer to paint outside an imported image. Pressure and feathered selection coverage are not implemented yet.
 
 A local synthetic sample uses a 3840×2160 document with four full-size raster layers and a soft mask stroke. The original full preview averaged about 71 ms. Regional redraw and smaller brush scratch buffers reduced this to about **13 ms** (three samples, excluding UI presentation). Transformed layers still take the full redraw path. This is not a general benchmark: longer strokes, different masks, and larger documents can be slower.
 
@@ -86,3 +86,7 @@ A local synthetic sample uses a 3840×2160 document with four full-size raster l
 The existing Swift/XCTest suite still requires macOS/Xcode. Linux tests do not imply that suite passes.
 
 Adjustment limitations: Hue/Saturation currently affects the full color range; selective color bands and Colorize remain. Levels Auto currently samples the whole source. Gaussian Blur uses a three-box approximation and does not expand layer bounds yet. Adjustment layers and the full Curves graphical editor remain separate parity work.
+
+Retouching tools are available from the tool dropdown: Eyedropper (I), Gradient (G), Clone Stamp (S), Healing (J), and Blur Brush. Alt-click selects a clone source. Options controls aligned cloning, sampling all visible layers, and the gradient end color (white by default). Gradient, blur, brush, and eraser support masks. Shift-click with the brush or eraser connects to the previous stroke endpoint. Retouching previews cancel with Escape and commit as a single undo step.
+
+Healing currently uses Content-Aware mode; Create Texture and Proximity Match remain to be exposed. Clone/heal currently target image pixels, not masks. Clone sources are captured at stroke start to avoid recursive smearing. The gradient is linear; radial and transparent-stop variants remain. Blur uses the same bounded three-box approximation as the filter.

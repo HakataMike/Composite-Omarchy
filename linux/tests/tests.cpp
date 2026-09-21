@@ -2,6 +2,7 @@
 #include "../src/operations.h"
 #include "../src/selection.h"
 #include "../src/filters.h"
+#include "../src/retouch.h"
 #include "../src/canvas.h"
 #include "../src/window.h"
 #include <QtTest>
@@ -35,6 +36,67 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void retouchingPixels() {
+        Arc::Layer layer; layer.size={64,64};
+        layer.image=QImage(64,64,QImage::Format_ARGB32_Premultiplied); layer.image.fill(Qt::white);
+        { QPainter painter(&layer.image); painter.fillRect(0,0,16,64,Qt::red); }
+        auto original=layer.image;
+        Arc::Brush brush; brush.color=Qt::black; brush.diameter=10;
+        QPainterPath path; path.moveTo(40,32);
+        QRectF bounds(0,0,64,64);
+        auto cloned=Arc::cloneStroke(layer,layer.image,{-32,0},path,brush,bounds,{});
+        QCOMPARE(cloned.pixelColor(40,32),QColor(Qt::red));
+        QCOMPARE(cloned.pixelColor(50,32),QColor(Qt::white));
+        QCOMPARE(layer.image,original);
+        QPainterPath selection; selection.addRect(32,0,32,64);
+        auto gradient=Arc::gradientStroke(layer,{32,0},{64,0},brush,Qt::white,bounds,selection,false);
+        QCOMPARE(gradient.pixelColor(8,32),QColor(Qt::red));
+        QVERIFY(gradient.pixelColor(33,32).red()<20);
+        QVERIFY(gradient.pixelColor(62,32).red()>230);
+        layer.origin={10,20}; layer.size={128,128};
+        gradient=Arc::gradientStroke(layer,{10,20},{138,20},brush,Qt::white,QRectF(0,0,200,200),{},false);
+        QVERIFY(gradient.pixelColor(0,32).red()<10);
+        QVERIFY(gradient.pixelColor(63,32).red()>245);
+        layer.origin={0,0}; layer.size={64,64};
+        layer.image.fill(Qt::white); layer.image.setPixelColor(32,32,Qt::black);
+        path=QPainterPath(); path.moveTo(32,32);
+        auto healed=Arc::healStroke(layer,path,brush,bounds,{});
+        QVERIFY(healed.pixelColor(32,32).red()>200);
+        QCOMPARE(healed.pixelColor(0,0),QColor(Qt::white));
+        auto blurred=Arc::blurStroke(layer,path,brush,bounds,{},false);
+        QVERIFY(blurred.pixelColor(32,32).red()>0);
+        QCOMPARE(blurred.pixelColor(0,0),QColor(Qt::white));
+        QCOMPARE(layer.image.pixelColor(32,32),QColor(Qt::black));
+    }
+    void retouchingGestures() {
+        auto d=sample(); Canvas canvas; canvas.resize(640,480); canvas.setDocument(d); canvas.show(); canvas.fit();
+        auto point=[&](QPointF p) { return canvas.canvasToWidget(p).toPoint(); };
+        QSignalSpy colors(&canvas,&Canvas::colorPicked), painted(&canvas,&Canvas::painted), errors(&canvas,&Canvas::errorOccurred);
+        canvas.setTool(Canvas::Tool::Eyedropper);
+        QTest::mouseClick(&canvas,Qt::LeftButton,Qt::NoModifier,point({8,8}));
+        QCOMPARE(colors.count(),1); QCOMPARE(colors[0][0].value<QColor>(),QColor(Qt::red));
+        canvas.setTool(Canvas::Tool::Clone);
+        QTest::mouseClick(&canvas,Qt::LeftButton,Qt::NoModifier,point({8,8})); QCOMPARE(errors.count(),1);
+        QTest::mouseClick(&canvas,Qt::LeftButton,Qt::AltModifier,point({8,8}));
+        QTest::mouseClick(&canvas,Qt::LeftButton,Qt::NoModifier,point({10,8})); QCOMPARE(errors.count(),1);
+        canvas.setTool(Canvas::Tool::Gradient);
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,point({2,6}));
+        QTest::mouseMove(&canvas,point({18,6}));
+        QTest::keyClick(&canvas,Qt::Key_Escape);
+        QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,point({18,6}));
+        QCOMPARE(painted.count(),0);
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,point({2,6}));
+        QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,point({18,6}));
+        QCOMPARE(painted.count(),1);
+        auto image=painted[0][1].value<QImage>();
+        canvas.setDocument(d); canvas.setTool(Canvas::Tool::Brush);
+        Arc::Brush brush; brush.diameter=2; canvas.setBrush(brush);
+        QTest::mouseClick(&canvas,Qt::LeftButton,Qt::NoModifier,point({4,8}));
+        QTest::mouseClick(&canvas,Qt::LeftButton,Qt::ShiftModifier,point({14,8}));
+        QCOMPARE(painted.count(),3);
+        QCOMPARE(painted.last()[1].value<QImage>().pixelColor(7,5),QColor(Qt::black));
+        QVERIFY(image.pixelColor(0,3).red()<20); QVERIFY(image.pixelColor(15,3).red()>230);
+    }
     void compositeAndExport() {
         auto d = sample();
         auto image = Arc::render(d);

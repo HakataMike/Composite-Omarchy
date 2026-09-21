@@ -28,11 +28,11 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 - [x] Crop to selection bounds, canvas size, image size/resolution (interactive snapping crop remains)
 
 ## Tools and filters
-- [ ] Straight-line brush strokes
-- [ ] Eyedropper
-- [ ] Gradient and editable shapes
+- [x] Straight-line brush strokes
+- [x] Eyedropper
+- [ ] Gradient and editable shapes (linear gradient implemented)
 - [ ] Editable paragraph text with inline editing and font controls
-- [ ] Clone stamp, healing, content-aware fill, blur tool
+- [ ] Clone stamp, healing, content-aware fill, blur tool (core tools implemented; healing mode controls and broader acceptance remain)
 - [ ] Levels/Auto, Curves, Hue/Saturation, Exposure, Gradient Map, Grain/Noise, Invert
 - [ ] Gaussian/motion blur with expanded bounds, lens correction
 - [ ] Background removal with a Linux implementation
