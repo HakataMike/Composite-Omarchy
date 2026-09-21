@@ -2,6 +2,7 @@
 #include "hierarchy.h"
 #include "blending.h"
 #include "styles.h"
+#include "masks.h"
 #include <QHash>
 #include <QSet>
 #include <functional>
@@ -143,7 +144,7 @@ void bakeClippingMask(Document &d, int index) {
         throw std::runtime_error("Clipping bake exceeds supported dimensions.");
     auto bounds=extent.toAlignedRect();
     auto region=d; region.size=bounds.size();
-    for(auto &l:region.layers) l.origin-=bounds.topLeft();
+    for(auto &l:region.layers) { l.origin-=bounds.topLeft(); offsetMask(l,-bounds.topLeft()); }
     validate(region);
     ClippingRenderer renderer(region); auto alpha=renderer.alpha(layer.maskSourceID);
     QImage coverage(layer.image.size(),QImage::Format_Grayscale8);

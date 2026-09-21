@@ -1,4 +1,5 @@
 #include "filters.h"
+#include "masks.h"
 #include "operations.h"
 #include <QColorSpace>
 #include <algorithm>
@@ -132,7 +133,7 @@ QImage filterLayer(const Layer &layer,const FilterSettings &filter,const std::op
     if(selection->isEmpty()) return original;
     QImage result=original.copy();
     if(result.isNull()) throw std::runtime_error("Insufficient memory for filtered selection.");
-    QPainter p(&result); p.setTransform(documentToPixels(layer,result.size())); p.setClipPath(*selection);
+    QPainter p(&result); p.setTransform(documentToPixels(mask ? maskTargetLayer(layer) : layer,result.size())); p.setClipPath(*selection);
     p.setTransform(QTransform()); p.setCompositionMode(QPainter::CompositionMode_Source); p.drawImage(QPoint(),changed);
     return result;
 }

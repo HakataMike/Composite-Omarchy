@@ -1,6 +1,7 @@
 #include "operations.h"
 #include "styles.h"
 #include "clipping.h"
+#include "masks.h"
 #include <QColorSpace>
 #include <cmath>
 #include <algorithm>
@@ -27,7 +28,7 @@ QImage transformedImage(const QImage &source, QSizeF localSize, const QTransform
 void crop(Document &d, QRect rectangle) {
     if (rectangle.isEmpty()) throw std::runtime_error("Select a crop rectangle first.");
     checkSize(rectangle.size());
-    for (auto &l : d.layers) l.origin -= rectangle.topLeft();
+    for (auto &l : d.layers) { l.origin -= rectangle.topLeft(); offsetMask(l,-rectangle.topLeft()); }
     for (auto &g : d.guides) g.position -= g.axis == "vertical" ? rectangle.x() : rectangle.y();
     d.size = rectangle.size(); validate(d);
 }
@@ -35,7 +36,7 @@ void resizeCanvas(Document &d, QSize size, bool centered) {
     checkSize(size);
     if (centered) {
         QPointF delta((size.width()-d.size.width())/2.0,(size.height()-d.size.height())/2.0);
-        for (auto &l : d.layers) l.origin += delta;
+        for (auto &l : d.layers) { l.origin += delta; offsetMask(l,delta); }
         for (auto &g : d.guides) g.position += g.axis == "vertical" ? delta.x() : delta.y();
     }
     d.size = size; validate(d);
@@ -54,9 +55,11 @@ void resizeImage(Document &d, QSize size) {
         checkSize(bounds.size());
         pixels += qint64(bounds.width())*bounds.height();
         if (pixels > MaxPixels) throw std::runtime_error("Resized layers exceed 100 megapixels.");
+        auto mask=l.mask.isNull() ? l.mask : rasterMask(l,maskEditingSize(l));
+        l.maskPlacement={};
         if (!l.image.isNull()) l.image = transformedImage(l.image,l.size,mapping,bounds,false);
         rasterize(l);
-        if (!l.mask.isNull()) l.mask = transformedImage(l.mask,l.size,mapping,bounds,true);
+        if (!l.mask.isNull()) l.mask = transformedImage(mask,l.size,mapping,bounds,true);
         l.origin = bounds.topLeft(); l.size = bounds.size(); l.rotation = 0; l.flipX = l.flipY = false;
     }
     for (auto &g : d.guides) g.position *= g.axis == "vertical" ? sx : sy;
@@ -64,6 +67,7 @@ void resizeImage(Document &d, QSize size) {
 }
 void flipCanvas(Document &d, bool horizontal) {
     for (auto &l : d.layers) {
+        flipMask(l,d.size,horizontal);
         if (horizontal) { l.origin.setX(d.size.width()-l.origin.x()-l.size.width()); l.flipX=!l.flipX; }
         else { l.origin.setY(d.size.height()-l.origin.y()-l.size.height()); l.flipY=!l.flipY; }
         l.rotation=-l.rotation;
@@ -111,7 +115,7 @@ void mergeDown(Document &d) {
     auto working=d; QSet<QUuid> removed{d.layers[bottom].id,d.layers[top].id};
     for(int i:{bottom,top}) if(!working.layers[i].maskSourceID.isNull() && !removed.contains(working.layers[i].maskSourceID)) bakeClippingMask(working,i);
     Document pair = d; pair.layers = {working.layers[bottom],working.layers[top]}; pair.active = 1; pair.size = bounds.size();
-    for (auto &layer : pair.layers) { layer.origin -= bounds.topLeft(); layer.parentID={}; }
+    for (auto &layer : pair.layers) { layer.origin -= bounds.topLeft(); offsetMask(layer,-bounds.topLeft()); layer.parentID={}; }
     Layer merged; merged.parentID=d.layers[top].parentID; merged.name = d.layers[top].name; merged.image = render(pair); merged.size = bounds.size(); merged.origin = bounds.topLeft();
     bakeClippingDependents(d,removed);
     d.layers[bottom] = merged; d.layers.removeAt(top); d.active = bottom; validate(d);

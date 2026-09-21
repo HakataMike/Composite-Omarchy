@@ -12,7 +12,8 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 ## Layer workflow
 - [ ] Folders, nesting/reordering, group transforms and masks (implemented; nonuniform shear and broader drag/drop acceptance remain)
 - [x] Clipping stacks and dependency masks, bake/release, source deletion preservation
-- [ ] Unlinked mask transforms
+- [x] Independent mask transforms, link/unlink, painting in mask coordinates, persistence
+- [ ] Shear-producing group and linked-mask transforms
 - [x] Mask fill/invert/blur/feather (Gaussian approximation documented)
 - [ ] Merge Down / Merge Layers / Merge Group
 - [ ] Adjustment layers: Hue/Saturation, Levels, Curves, Exposure, Gradient Map, Grain

@@ -1,6 +1,7 @@
 #include "hierarchy.h"
 #include "styles.h"
 #include "clipping.h"
+#include "masks.h"
 #include <QHash>
 #include <QSet>
 #include <cmath>
@@ -25,7 +26,7 @@ void multiplyMask(Layer &child, const Layer &group) {
     {
         QPainter p(&coverage); p.setTransform(group.transform()*sourceToDocument.inverted());
         p.setRenderHint(QPainter::SmoothPixmapTransform);
-        p.drawImage(QRectF(QPointF(),group.size),group.mask);
+        p.drawImage(QRectF(QPointF(),group.size),rasterMask(group,maskEditingSize(group)));
     }
     child.image=child.image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     if(child.image.isNull()) throw std::runtime_error("Insufficient memory for folder mask.");
@@ -143,7 +144,7 @@ void mergeFolder(Document &d) {
     Document subtree=d; subtree.layers.clear(); subtree.size=bounds.size(); subtree.active=0;
     auto root=folder; root.parentID={}; root.visible=true; subtree.layers.append(root);
     for(int i:children) subtree.layers.append(working.layers[i]);
-    for(auto &l:subtree.layers) l.origin-=bounds.topLeft();
+    for(auto &l:subtree.layers) { l.origin-=bounds.topLeft(); offsetMask(l,-bounds.topLeft()); }
     Layer merged; merged.visible=folder.visible; merged.id=folder.id; merged.name=folder.name; merged.parentID=folder.parentID;
     merged.image=render(subtree); merged.size=bounds.size(); merged.origin=bounds.topLeft();
     bakeClippingDependents(d,members);
@@ -189,13 +190,14 @@ void reorderLayer(Document &d, bool raise) {
 }
 void transformGroup(Document &d, int index, const Layer &replacement) {
     const auto original=d.layers[index];
-    if(!original.isGroup) { d.layers[index]=replacement; return; }
+    auto adjusted=replacement; followMask(original,adjusted);
+    if(!original.isGroup) { d.layers[index]=adjusted; return; }
     if(original.origin==replacement.origin && original.size==replacement.size && original.rotation==replacement.rotation
-        && original.flipX==replacement.flipX && original.flipY==replacement.flipY) { d.layers[index]=replacement; return; }
+        && original.flipX==replacement.flipX && original.flipY==replacement.flipY) { d.layers[index]=adjusted; return; }
     QTransform scale; scale.scale(replacement.size.width()/original.size.width(),replacement.size.height()/original.size.height());
     auto mapping=original.transform().inverted()*scale*replacement.transform();
     for(int i:descendants(d,original.id)) {
-        auto &child=d.layers[i];
+        auto &child=d.layers[i]; auto before=child;
         auto transformed=child.transform()*mapping;
         auto origin=transformed.map(QPointF());
         auto vx=transformed.map(QPointF(child.size.width(),0))-origin;
@@ -207,8 +209,9 @@ void transformGroup(Document &d, int index, const Layer &replacement) {
         child.size={width,height}; child.origin=center-QPointF(width/2,height/2);
         child.rotation=std::atan2(vx.y(),vx.x())*180/M_PI;
         child.flipX=false; child.flipY=(vx.x()*vy.y()-vx.y()*vy.x())<0;
+        followMask(before,child);
         if(!child.shape.isEmpty()) child.image=shapeImage(child.shape,child.size);
     }
-    d.layers[index]=replacement;
+    d.layers[index]=adjusted;
 }
 }

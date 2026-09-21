@@ -25,3 +25,5 @@ HEADERS += ../src/hierarchy.h
 HEADERS += ../src/layer_tree.h
 SOURCES += ../src/clipping.cpp
 HEADERS += ../src/clipping.h
+SOURCES += ../src/masks.cpp
+HEADERS += ../src/masks.h

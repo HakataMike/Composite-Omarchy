@@ -3,6 +3,7 @@
 #include "blending.h"
 #include "hierarchy.h"
 #include "clipping.h"
+#include "masks.h"
 #include <algorithm>
 #include <QColorSpace>
 #include <QDir>
@@ -56,6 +57,12 @@ QUuid uuid(const QJsonValue &value) {
     require(value.isString() && !QUuid(value.toString()).isNull(), "Invalid project UUID.");
     return QUuid(value.toString());
 }
+bool mapsPixelGrid(const QTransform &t) {
+    for(double v:{t.m11(),t.m12(),t.m21(),t.m22(),t.dx(),t.dy()})
+        if(std::abs(v-std::round(v))>1e-8) return false;
+    return std::abs(std::abs(t.determinant())-1)<1e-8
+        && std::abs(t.m11())<=1 && std::abs(t.m12())<=1 && std::abs(t.m21())<=1 && std::abs(t.m22())<=1;
+}
 bool hasNonseparableBlend(const Document &d) {
     return std::any_of(d.layers.begin(),d.layers.end(),[](const auto &l) { return l.visible && !l.image.isNull() && isNonseparableBlend(l.blend); });
 }
@@ -78,7 +85,7 @@ QStringList blendModes() {
 bool Layer::operator==(const Layer &o) const {
     return id == o.id && parentID == o.parentID && maskSourceID == o.maskSourceID && isGroup == o.isGroup && name == o.name && image == o.image && origin == o.origin && size == o.size
         && rotation == o.rotation && flipX == o.flipX && flipY == o.flipY && visible == o.visible
-        && shape == o.shape && text == o.text && mask == o.mask && maskEnabled == o.maskEnabled
+        && shape == o.shape && text == o.text && mask == o.mask && maskEnabled == o.maskEnabled && maskLinked == o.maskLinked && maskPlacement == o.maskPlacement
         && opacity == o.opacity && blend == o.blend && sampling == o.sampling;
 }
 bool Document::operator==(const Document &o) const {
@@ -108,7 +115,7 @@ void validate(const Document &d) {
     QSet<QUuid> ids;
     qint64 pixels = 0, maskPixels = 0;
     for (const auto &l : d.layers) {
-        validateStyles(l);
+        validateStyles(l); validateMaskPlacement(l);
         require(!l.id.isNull() && !ids.contains(l.id), "Duplicate or invalid layer ID."); ids.insert(l.id);
         require(std::isfinite(l.origin.x()) && std::isfinite(l.origin.y()) && std::abs(l.origin.x()) <= 1000000
             && std::abs(l.origin.y()) <= 1000000 && std::isfinite(l.rotation)
@@ -157,8 +164,11 @@ void paint(QPainter &p, const Document &d, QRect region) {
         p.setTransform(l.transform(), true);
         p.setOpacity(l.opacity);
         p.setCompositionMode(painterBlendMode(l.blend));
-        p.setRenderHint(QPainter::SmoothPixmapTransform, l.sampling != "Nearest");
-        if (l.mask.isNull() || !l.maskEnabled) {
+        auto pixelTransform=p.transform();
+        pixelTransform.scale(l.size.width()/l.image.width(),l.size.height()/l.image.height());
+        p.setRenderHint(QPainter::SmoothPixmapTransform,l.sampling!="Nearest" && !mapsPixelGrid(pixelTransform));
+        auto mask=l.maskEnabled ? rasterMask(l,l.image.size()) : l.mask;
+        if (mask.isNull() || !l.maskEnabled) {
             p.drawImage(QRectF(QPointF(), l.size), l.image);
         } else {
             QTransform sourceToDocument = l.transform();
@@ -173,21 +183,21 @@ void paint(QPainter &p, const Document &d, QRect region) {
                 QImage pixels = l.image.copy(sourceRect).convertToFormat(QImage::Format_ARGB32_Premultiplied);
                 require(!pixels.isNull(), "Insufficient memory for masked image.");
                 QImage scaledMask;
-                const bool uniform = l.mask.size() == QSize(1,1);
-                const bool sameSize = l.mask.size() == l.image.size();
+                const bool uniform = mask.size() == QSize(1,1);
+                const bool sameSize = mask.size() == l.image.size();
                 if (!uniform && !sameSize) {
                     scaledMask = QImage(sourceRect.size(), QImage::Format_RGB32);
                     require(!scaledMask.isNull(), "Insufficient memory for mask rendering.");
                     QPainter maskPainter(&scaledMask);
                     maskPainter.translate(-sourceRect.topLeft());
                     maskPainter.setRenderHint(QPainter::SmoothPixmapTransform);
-                    maskPainter.drawImage(QRect(QPoint(),l.image.size()),l.mask);
+                    maskPainter.drawImage(QRect(QPoint(),l.image.size()),mask);
                 }
                 for (int y = 0; y < pixels.height(); ++y) {
                     auto *row = reinterpret_cast<QRgb *>(pixels.scanLine(y));
                     for (int x = 0; x < pixels.width(); ++x) {
-                        unsigned c = uniform ? l.mask.constScanLine(0)[0]
-                            : sameSize ? l.mask.constScanLine(y+sourceRect.y())[x+sourceRect.x()]
+                        unsigned c = uniform ? mask.constScanLine(0)[0]
+                            : sameSize ? mask.constScanLine(y+sourceRect.y())[x+sourceRect.x()]
                             : qRed(reinterpret_cast<const QRgb *>(scaledMask.constScanLine(y))[x]);
                         const QRgb v = row[x];
                         row[x] = qRgba((qRed(v)*c+127)/255,(qGreen(v)*c+127)/255,
@@ -212,7 +222,7 @@ void repaintRegion(QImage &image, const Document &d, QRect region) {
     if(hasClipping(d) || hasNonseparableBlend(d) || std::any_of(d.layers.begin(),d.layers.end(),[](const auto &l) { return l.isGroup; })) { image=render(d); return; }
     for (const auto &layer : d.layers) {
         if (!layer.visible || layer.image.isNull()) continue;
-        if (layer.rotation != 0 || layer.flipX || layer.flipY || layer.size != QSizeF(layer.image.size())
+        if (!layer.maskPlacement.isEmpty() || layer.rotation != 0 || layer.flipX || layer.flipY || layer.size != QSizeF(layer.image.size())
             || layer.origin.x() != std::floor(layer.origin.x()) || layer.origin.y() != std::floor(layer.origin.y())) {
             // Qt's clipped transformed sampling can differ by one channel level.
             // Preserve exact preview/export agreement until a shared tile sampler exists.
@@ -295,7 +305,7 @@ Document loadProject(const QString &path) {
     for (const auto value : m["layers"].toArray()) {
         require(value.isObject(), "Invalid layer record.");
         const auto r = value.toObject();
-        keys(r, {"id", "name", "isVisible", "transform", "imageFile", "opacity", "blendMode", "parentID", "isGroup", "maskFile", "maskEnabled", "shape", "text", "maskSourceID"});
+        keys(r, {"id", "name", "isVisible", "transform", "imageFile", "opacity", "blendMode", "parentID", "isGroup", "maskFile", "maskEnabled", "shape", "text", "maskSourceID", "maskPlacement", "maskLinked"});
         Layer l;
         if(r.contains("parentID") && !r["parentID"].isNull()) l.parentID=uuid(r["parentID"]);
         if(r.contains("maskSourceID") && !r["maskSourceID"].isNull()) { require(version>=5,"Clipping masks require version 5."); l.maskSourceID=uuid(r["maskSourceID"]); }
@@ -335,6 +345,11 @@ Document loadProject(const QString &path) {
             require(!maskFile.isEmpty(), "Mask enabled flag without a mask.");
             l.maskEnabled = boolean(r["maskEnabled"]);
         }
+        if(r.contains("maskPlacement") && !r["maskPlacement"].isNull()) {
+            require(!maskFile.isEmpty() && r["maskPlacement"].isObject() && !r["maskPlacement"].toObject().isEmpty(),"Invalid mask placement.");
+            l.maskPlacement=r["maskPlacement"].toObject();
+        }
+        if(r.contains("maskLinked")) { require(!maskFile.isEmpty(),"Mask link flag without a mask."); l.maskLinked=boolean(r["maskLinked"]); }
         d.layers.append(l); files.append(asset); maskFiles.append(maskFile);
     }
     if (m.contains("activeLayerID") && !m["activeLayerID"].isNull()) {
@@ -373,7 +388,10 @@ Document loadProject(const QString &path) {
 }
 void saveProject(const Document &d, const QString &path) {
     validate(d);
-    for(const auto &layer : d.layers) require((layer.shape.isEmpty() && layer.text.isEmpty()) || !layer.image.isNull(), "Editable layers require a cached image.");
+    for(const auto &layer : d.layers) {
+        require((layer.shape.isEmpty() && layer.text.isEmpty()) || !layer.image.isNull(), "Editable layers require a cached image.");
+        require((layer.maskPlacement.isEmpty() && layer.maskLinked) || !layer.mask.isNull(), "Mask placement requires mask pixels.");
+    }
     QFileInfo destination(QDir::cleanPath(QFileInfo(path).absoluteFilePath()));
     require(destination.fileName().endsWith(".comp", Qt::CaseInsensitive) && !destination.isSymLink(), "Project name must end with .comp and cannot be a symbolic link.");
     // Only replace projects we can fully understand, never an arbitrary directory.
@@ -410,7 +428,10 @@ void saveProject(const Document &d, const QString &path) {
         if (!l.mask.isNull()) {
             QString name = idString(l.id) + ".mask.png";
             require(l.mask.save(staging.path() + "/images/" + name, "PNG"), "Could not write layer mask.");
-            r["maskFile"] = name; r["maskEnabled"] = l.maskEnabled; version = std::max(version,l.isGroup ? 6 : 4);
+            r["maskFile"] = name; r["maskEnabled"] = l.maskEnabled;
+            if(!l.maskLinked) r["maskLinked"]=false;
+            if(!l.maskPlacement.isEmpty()) r["maskPlacement"]=l.maskPlacement;
+            version = std::max(version,l.isGroup ? 6 : 4);
         }
         if(!l.maskSourceID.isNull()) { r["maskSourceID"]=idString(l.maskSourceID); version=std::max(version,5); }
         if(l.isGroup) r["isGroup"]=true;

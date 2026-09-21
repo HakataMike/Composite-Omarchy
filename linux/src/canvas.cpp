@@ -3,6 +3,7 @@
 #include "retouch.h"
 #include "operations.h"
 #include "hierarchy.h"
+#include "masks.h"
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QKeyEvent>
@@ -120,7 +121,8 @@ void Canvas::paintEvent(QPaintEvent *) {
     p.drawImage(QPoint(), composite); p.restore();
     QPen border(palette().color(QPalette::Mid)); border.setCosmetic(true); p.setPen(border); p.drawRect(bounds);
     if (document.active >= 0 && tool == Tool::Move) {
-        const auto &l = document.layers[document.active];
+        auto l = document.layers[document.active];
+        if(maskTarget && !l.maskLinked && !l.mask.isNull()) l=Arc::maskTargetLayer(l);
         if (l.visible) {
             p.save();
             p.setTransform(l.transform(), true);
@@ -240,6 +242,15 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
         updateStroke(documentPoint(event->position()));
         return;
     }
+    if(maskTarget && document.active>=0) {
+        const auto &l=document.layers[document.active];
+        if(!l.maskLinked && !l.mask.isNull() && Arc::effectiveVisible(document,document.active)) {
+            auto target=Arc::maskTargetLayer(l);
+            if(QRectF(QPointF(),target.size).contains(target.transform().inverted().map(documentPoint(event->position())))) {
+                dragOriginal=document; dragLayer=document.active; originalOrigin=target.origin; dragging=true; draggingMask=true; return;
+            }
+        }
+    }
     int hit = -1;
     auto point = documentPoint(event->position());
     for (int i : Arc::visibleLayerOrder(document,true)) {
@@ -253,7 +264,7 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
     emit selected(hit);
     // Selection may synchronously replace the displayed document.
     if (hit >= 0) {
-        dragOriginal=document; dragLayer = hit; originalOrigin = document.layers[hit].origin; dragging = true;
+        draggingMask=false; dragOriginal=document; dragLayer = hit; originalOrigin = document.layers[hit].origin; dragging = true;
     }
 }
 void Canvas::mouseDoubleClickEvent(QMouseEvent *event) {
@@ -278,17 +289,18 @@ void Canvas::mouseMoveEvent(QMouseEvent *event) {
             if (std::abs(delta.x()) > std::abs(delta.y())) delta.setY(0); else delta.setX(0);
         }
         auto point = originalOrigin + delta;
-        if(snapping && !(event->modifiers() & Qt::AltModifier)) {
+        if(snapping && !draggingMask && !(event->modifiers() & Qt::AltModifier)) {
             auto snapped=Arc::snapLayerOrigin(document,dragLayer,point,6/zoom,guidesVisible);
             if(event->modifiers() & Qt::ShiftModifier) {
                 if(delta.y()==0) snapped.setY(originalOrigin.y()); else snapped.setX(originalOrigin.x());
             }
             point=snapped;
         }
-        auto changed=dragOriginal.layers[dragLayer];
+        auto changed=draggingMask ? Arc::maskTargetLayer(dragOriginal.layers[dragLayer]) : dragOriginal.layers[dragLayer];
         changed.origin={std::clamp(point.x(),-1000000.0,1000000.0),std::clamp(point.y(),-1000000.0,1000000.0)};
         document=dragOriginal;
-        Arc::transformGroup(document,dragLayer,changed);
+        if(draggingMask) document.layers[dragLayer].maskPlacement=Arc::placementOf(changed);
+        else Arc::transformGroup(document,dragLayer,changed);
         refreshImage();
     }
 }
@@ -350,9 +362,12 @@ void Canvas::mouseReleaseEvent(QMouseEvent *event) {
     }
     if (dragging && event->button() == Qt::LeftButton) {
         mouseMoveEvent(event);
-        auto index = dragLayer; auto point = document.layers[index].origin;
-        dragging = false; dragLayer = -1;
-        if (point != originalOrigin) emit moved(index, point);
+        auto index=dragLayer; auto point=draggingMask ? Arc::maskTargetLayer(document.layers[index]).origin : document.layers[index].origin;
+        bool mask=draggingMask; dragging=false; draggingMask=false; dragLayer=-1;
+        if(point!=originalOrigin) {
+            if(mask) emit maskMoved(index,document.layers[index].maskPlacement);
+            else emit moved(index,point);
+        }
     }
 }
 void Canvas::wheelEvent(QWheelEvent *event) {
@@ -372,7 +387,7 @@ void Canvas::cancelGesture() {
         refreshImage();
     }
     if (selecting) { selection = previousSelection; selecting = false; previousSelection.reset(); update(); }
-    if (dragging) { document=dragOriginal; dragging = false; dragLayer = -1; refreshImage(); }
+    if (dragging) { document=dragOriginal; draggingMask=false; dragging = false; dragLayer = -1; refreshImage(); }
     panning = false; unsetCursor();
 }
 void Canvas::keyPressEvent(QKeyEvent *event) {

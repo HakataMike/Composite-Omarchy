@@ -1,4 +1,5 @@
 #include "painting.h"
+#include "masks.h"
 #include <QPainterPathStroker>
 #include <cmath>
 #include <stdexcept>
@@ -64,7 +65,7 @@ QImage paintStroke(const Layer &original, const QPainterPath &path, const Brush 
 }
 QImage paintMaskStroke(const Layer &original, const QPainterPath &path, const Brush &brush, QRectF clip, const QPainterPath &selection) {
     if (original.mask.isNull()) throw std::runtime_error("Add a mask before painting mask coverage.");
-    Layer target = original;
+    Layer target = maskTargetLayer(original);
     // Expand compact uniform masks only when edited; preserve nonuniform resolution.
     QImage mask = original.mask;
     if(mask.size()==QSize(1,1) && (!original.image.isNull() || original.isGroup))

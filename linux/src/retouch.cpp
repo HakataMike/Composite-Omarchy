@@ -1,4 +1,5 @@
 #include "retouch.h"
+#include "masks.h"
 #include "operations.h"
 #include <QLinearGradient>
 #include <stdexcept>
@@ -13,7 +14,7 @@ QTransform mapping(const Layer &layer,QSize pixels) {
     auto t=layer.transform(); t.scale(layer.size.width()/pixels.width(),layer.size.height()/pixels.height()); return t.inverted();
 }
 QImage coverage(const Layer &layer,const QPainterPath &path,const Brush &brush,QRectF clip,const QPainterPath &selection,QSize size) {
-    auto target=layer; target.mask=QImage(size,QImage::Format_Grayscale8);
+    auto target=layer; target.maskPlacement={}; target.mask=QImage(size,QImage::Format_Grayscale8);
     if(target.mask.isNull()) throw std::runtime_error("Insufficient memory for retouching coverage.");
     target.mask.fill(Qt::black); target.image=QImage();
     Brush white=brush; white.color=Qt::white; white.eraser=false;
@@ -45,7 +46,7 @@ QImage gradientStroke(const Layer &layer,QPointF start,QPointF end,const Brush &
     QColor foreground=brush.color;
     if(mask) { int a=qGray(foreground.rgb()),b=qGray(background.rgb()); foreground=QColor(a,a,a); background=QColor(b,b,b); }
     image=image.copy(); if(image.isNull()) throw std::runtime_error("Insufficient memory for gradient.");
-    QPainter p(&image); p.setTransform(mapping(layer,image.size())); p.setClipRect(clip);
+    QPainter p(&image); p.setTransform(mapping(mask ? maskTargetLayer(layer) : layer,image.size())); p.setClipRect(clip);
     if(!selection.isEmpty()) p.setClipPath(selection,Qt::IntersectClip);
     QLinearGradient gradient(start,end); gradient.setColorAt(0,foreground); gradient.setColorAt(1,background);
     p.setOpacity(brush.opacity); p.fillRect(clip,gradient); return image;
@@ -63,7 +64,7 @@ QImage healStroke(const Layer &layer,const QPainterPath &path,const Brush &brush
 QImage blurStroke(const Layer &layer,const QPainterPath &path,const Brush &brush,QRectF clip,const QPainterPath &selection,bool mask) {
     QImage source=mask ? layer.mask : layer.image;
     if(source.isNull()) throw std::runtime_error("Select an image or mask to blur.");
-    auto coverageImage=coverage(layer,path,brush,clip,selection,source.size());
+    auto coverageImage=coverage(mask ? maskTargetLayer(layer) : layer,path,brush,clip,selection,source.size());
     return mix(source,blurImage(source,std::clamp(int(brush.diameter/10),1,50)),coverageImage);
 }
 QImage cloneStroke(const Layer &layer,const QImage &sample,QPointF offset,const QPainterPath &path,const Brush &brush,QRectF clip,const QPainterPath &selection) {

@@ -17,6 +17,7 @@
 #include <QTreeWidget>
 #include "../src/hierarchy.h"
 #include "../src/clipping.h"
+#include "../src/masks.h"
 #include <QDoubleSpinBox>
 #include <QAction>
 #include <QMessageBox>
@@ -42,6 +43,49 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void independentMaskGeometryAndPainting() {
+        auto d=sample(); auto &l=d.layers[0];
+        l.mask=QImage(l.image.size(),QImage::Format_Grayscale8); l.mask.fill(Qt::white);
+        l.mask.setPixelColor(6,4,Qt::black); l.maskLinked=false; l.maskPlacement=Arc::placementOf(l);
+        auto changed=l; changed.origin+={4,0}; Arc::transformGroup(d,0,changed);
+        QCOMPARE(Arc::render(d).pixelColor(8,7).alpha(),0);
+        QCOMPARE(Arc::render(d).pixelColor(12,7),QColor(Qt::red));
+        QPainterPath path; path.moveTo(8.5,7.5); Arc::Brush brush; brush.color=Qt::white; brush.diameter=2;
+        l.mask=Arc::paintMaskStroke(l,path,brush,QRectF(QPointF(),d.size));
+        QCOMPARE(Arc::render(d).pixelColor(8,7),QColor(Qt::red));
+        l.mask.setPixelColor(6,4,Qt::black);
+        l.maskLinked=true; changed=l; changed.origin+={4,0}; Arc::transformGroup(d,0,changed);
+        QCOMPARE(Arc::render(d).pixelColor(12,7).alpha(),0);
+        auto before=Arc::render(d);
+        Arc::flipCanvas(d,true);
+        auto flipped=Arc::render(d),expectedFlip=before.flipped(Qt::Horizontal);
+        QCOMPARE(flipped,expectedFlip);
+        Arc::flipCanvas(d,true); Arc::crop(d,{4,0,28,24}); QCOMPARE(Arc::render(d),before.copy(4,0,28,24));
+        QTemporaryDir temp; auto file=temp.filePath("mask.comp"); Arc::saveProject(d,file);
+        auto loaded=Arc::loadProject(file); QCOMPARE(loaded.layers,d.layers); QCOMPARE(Arc::render(loaded),Arc::render(d));
+    }
+    void maskUnlinkControlsAndDrag() {
+        auto d=sample(); auto &l=d.layers[0]; l.mask=QImage(l.image.size(),QImage::Format_Grayscale8); l.mask.fill(Qt::white);
+        QTemporaryDir temp; auto file=temp.filePath("mask.comp"); Arc::saveProject(d,file);
+        Window window; window.show(); window.openProject(file);
+        auto *linked=window.findChild<QCheckBox *>("maskLinked"); QVERIFY(linked); QVERIFY(linked->isChecked());
+        linked->setChecked(false); window.findChild<QComboBox *>("paintTarget")->setCurrentIndex(1);
+        auto *canvas=window.findChild<Canvas *>(); canvas->fit(); canvas->setTool(Canvas::Tool::Move);
+        QSignalSpy moved(canvas,&Canvas::maskMoved),layersMoved(canvas,&Canvas::moved);
+        auto point=[&](QPointF p) { return canvas->canvasToWidget(p).toPoint(); };
+        QTest::mousePress(canvas,Qt::LeftButton,Qt::NoModifier,point({8,8}));
+        QTest::mouseRelease(canvas,Qt::LeftButton,Qt::NoModifier,point({12,8}));
+        QCOMPARE(moved.count(),1); QCOMPARE(layersMoved.count(),0);
+        QAction *save=nullptr,*undo=nullptr;
+        for(auto *a:window.findChildren<QAction *>()) {
+            if(a->text()=="&Save project") save=a;
+            if(a->shortcut()==QKeySequence::Undo) undo=a;
+        }
+        QVERIFY(save); QVERIFY(undo); save->trigger();
+        auto loaded=Arc::loadProject(file); QCOMPARE(loaded.layers[0].origin,l.origin); QVERIFY(!loaded.layers[0].maskLinked);
+        QVERIFY(std::abs(Arc::maskTargetLayer(loaded.layers[0]).origin.x()-6)<0.2);
+        undo->trigger(); save->trigger(); QCOMPARE(Arc::maskTargetLayer(Arc::loadProject(file).layers[0]).origin,l.origin);
+    }
     void clippingStacksAndDependencies() {
         auto d=sample(); d.layers[0].opacity=0.5;
         auto top=d.layers[0]; top.id=QUuid::createUuid(); top.opacity=1; top.image.fill(Qt::blue);

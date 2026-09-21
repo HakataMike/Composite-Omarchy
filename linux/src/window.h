@@ -26,7 +26,7 @@ private:
     QWidget *inspector;
     QDoubleSpinBox *x, *y, *w, *h, *angle, *opacity;
     QComboBox *blend, *paintTarget;
-    QCheckBox *maskEnabled;
+    QCheckBox *maskEnabled, *maskLinked;
     QPushButton *addMask, *removeMask;
     QLabel *maskPreview;
     QLabel *zoomLabel;
@@ -34,6 +34,7 @@ private:
     bool sizeFirstImport = true;
     void refresh();
     void edit(const QString &name, const std::function<void(Arc::Document &)> &operation);
+    void editGeometry(const QString &name, const std::function<void(Arc::Layer &)> &operation);
     void editLayer(const QString &name, const std::function<void(Arc::Layer &)> &operation);
     void report(const std::function<void()> &operation);
     bool save(bool choosePath = false);

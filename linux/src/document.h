@@ -14,8 +14,9 @@ struct Layer {
     bool isGroup = false;
     QImage image;
     QJsonObject shape, text; // Editable source; image remains the portable raster fallback.
-    QImage mask; // Grayscale8 coverage, normalized to the layer bounds.
-    bool maskEnabled = true;
+    QImage mask; // Grayscale8 coverage; optional placement gives independent document coordinates.
+    bool maskEnabled = true, maskLinked = true;
+    QJsonObject maskPlacement;
     QPointF origin;
     QSizeF size;
     double rotation = 0;

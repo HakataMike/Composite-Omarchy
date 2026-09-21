@@ -29,6 +29,7 @@ public:
 signals:
     void selected(int index);
     void moved(int index, QPointF origin);
+    void maskMoved(int index, QJsonObject placement);
     void guideMoved(int index, double position);
     void filesDropped(QStringList paths);
     void zoomChanged(double zoom);
@@ -59,6 +60,7 @@ private:
     bool drafting = false;
     QPointF draftAnchor, draftStart, draftEnd;
     void updateDraft(QPointF point, Qt::KeyboardModifiers modifiers);
+    bool draggingMask = false;
     bool space = false, panning = false, dragging = false;
     Arc::Document dragOriginal;
     int dragLayer = -1;

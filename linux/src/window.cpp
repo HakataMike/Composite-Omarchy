@@ -5,6 +5,7 @@
 #include "styles.h"
 #include "hierarchy.h"
 #include "clipping.h"
+#include "masks.h"
 #include "layer_tree.h"
 #include <QStyle>
 #include <QJsonArray>
@@ -306,15 +307,23 @@ Window::Window() {
         if (document.active >= 0 && !document.layers[document.active].mask.isNull()) paintTarget->setCurrentIndex(1);
     });
     connect(removeMask, &QPushButton::clicked, this, [this] {
-        editLayer("Remove layer mask", [](auto &layer) { layer.mask = QImage(); layer.maskEnabled = true; });
+        editLayer("Remove layer mask", [](auto &layer) { layer.mask = QImage(); layer.maskEnabled = true; layer.maskLinked=true; layer.maskPlacement={}; });
     });
     maskEnabled = new QCheckBox("Enable mask"); maskEnabled->setObjectName("maskEnabled"); layout->addWidget(maskEnabled);
     connect(maskEnabled, &QCheckBox::toggled, this, [this](bool value) {
         if (!refreshing) editLayer("Toggle layer mask", [=](auto &layer) { layer.maskEnabled = value; });
     });
+    maskLinked=new QCheckBox("Link mask to layer"); maskLinked->setObjectName("maskLinked"); layout->addWidget(maskLinked);
+    connect(maskLinked,&QCheckBox::toggled,this,[this](bool linked) {
+        if(refreshing) return;
+        editLayer("Link / unlink mask",[=](auto &l) {
+            if(!linked && l.maskPlacement.isEmpty()) l.maskPlacement=Arc::placementOf(l);
+            l.maskLinked=linked;
+        });
+    });
     paintTarget = new QComboBox; paintTarget->setObjectName("paintTarget"); paintTarget->addItems({"Paint image", "Paint mask"});
     layout->addWidget(paintTarget);
-    connect(paintTarget, &QComboBox::currentIndexChanged, this, [this](int value) { canvas->setMaskTarget(value == 1); });
+    connect(paintTarget, &QComboBox::currentIndexChanged, this, [this](int value) { canvas->setMaskTarget(value == 1); if(!refreshing) refresh(); });
     maskPreview = new QLabel; maskPreview->setToolTip("Mask coverage: black hides, white reveals. The eraser restores white.");
     layout->addWidget(maskPreview);
     inspector = new QWidget; auto *form = new QFormLayout(inspector);
@@ -326,17 +335,22 @@ Window::Window() {
     w = spin("Width", 1, 300000, "layerWidth"); h = spin("Height", 1, 300000, "layerHeight");
     angle = spin("Rotation °", -360000, 360000, "layerRotation"); opacity = spin("Opacity %", 0, 100, "layerOpacity");
     blend = new QComboBox; blend->addItems(Arc::blendModes()); form->addRow("Blend", blend);
-    auto bind = [this](QDoubleSpinBox *s, auto change) {
-        connect(s, &QDoubleSpinBox::valueChanged, this, [this, change](double value) { if (!refreshing) editLayer("Layer transform / appearance", [=](auto &l) { change(l, value); }); });
+    auto bind = [this](QDoubleSpinBox *s, auto change, bool geometry=true) {
+        connect(s,&QDoubleSpinBox::valueChanged,this,[this,change,geometry](double value) {
+            if(refreshing) return;
+            auto operation=[=](Arc::Layer &l) { change(l,value); };
+            if(geometry) editGeometry("Transform layer / mask",operation);
+            else editLayer("Layer appearance",operation);
+        });
     };
     bind(x, [](auto &l, double v) { l.origin.setX(v); }); bind(y, [](auto &l, double v) { l.origin.setY(v); });
     bind(w, [](auto &l, double v) { l.size.setWidth(v); if(!l.shape.isEmpty()) l.image=Arc::shapeImage(l.shape,l.size); }); bind(h, [](auto &l, double v) { l.size.setHeight(v); if(!l.shape.isEmpty()) l.image=Arc::shapeImage(l.shape,l.size); });
-    bind(angle, [](auto &l, double v) { l.rotation = v; }); bind(opacity, [](auto &l, double v) { l.opacity = v/100; });
+    bind(angle, [](auto &l, double v) { l.rotation = v; }); bind(opacity, [](auto &l, double v) { l.opacity = v/100; },false);
     connect(blend, &QComboBox::currentTextChanged, this, [this](const QString &value) { if (!refreshing) editLayer("Blend mode", [&](auto &l) { l.blend = value; }); });
     auto *flipX = new QPushButton("Flip horizontal"), *flipY = new QPushButton("Flip vertical");
     form->addRow(flipX, flipY);
-    connect(flipX, &QPushButton::clicked, this, [this] { editLayer("Flip horizontal", [](auto &l) { l.flipX = !l.flipX; }); });
-    connect(flipY, &QPushButton::clicked, this, [this] { editLayer("Flip vertical", [](auto &l) { l.flipY = !l.flipY; }); });
+    connect(flipX, &QPushButton::clicked, this, [this] { editGeometry("Flip horizontal", [](auto &l) { l.flipX = !l.flipX; }); });
+    connect(flipY, &QPushButton::clicked, this, [this] { editGeometry("Flip vertical", [](auto &l) { l.flipY = !l.flipY; }); });
     layout->addWidget(inspector); dock->setWidget(panel); addDockWidget(Qt::RightDockWidgetArea, dock);
     connect(layers, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *item) {
         if(refreshing) return;
@@ -385,6 +399,9 @@ Window::Window() {
     connect(canvas, &Canvas::guideMoved, this, [this](int index,double position) {
         edit("Move guide",[=](auto &d) { d.guides[index].position=position; });
     });
+    connect(canvas,&Canvas::maskMoved,this,[this](int index,QJsonObject placement) {
+        edit("Move mask",[&](auto &d) { d.layers[index].maskPlacement=placement; });
+    });
     connect(canvas, &Canvas::moved, this, [this](int index, QPointF point) { edit("Move layer", [=](auto &d) { auto changed=d.layers[index]; changed.origin=point; Arc::transformGroup(d,index,changed); }); });
     connect(canvas, &Canvas::painted, this, [this](int index, const QImage &image) {
         edit("Paint stroke", [&](auto &d) { d.layers[index].image = image; Arc::rasterize(d.layers[index]); });
@@ -426,15 +443,17 @@ void Window::refresh() {
     }
     inspector->setEnabled(document.active >= 0);
     if (document.active >= 0) {
-        const auto &l = document.layers[document.active];
+        const auto &active = document.layers[document.active];
+        auto l=paintTarget->currentIndex()==1 && !active.maskLinked ? Arc::maskTargetLayer(active) : active;
         x->setValue(l.origin.x()); y->setValue(l.origin.y()); w->setValue(l.size.width()); h->setValue(l.size.height());
-        angle->setValue(l.rotation); opacity->setValue(l.opacity*100); blend->setCurrentText(l.blend); blend->setEnabled(!l.isGroup);
+        angle->setValue(l.rotation); opacity->setValue(active.opacity*100); blend->setCurrentText(active.blend); blend->setEnabled(!active.isGroup);
     }
     const bool hasLayer = document.active >= 0;
     const bool hasMask = hasLayer && !document.layers[document.active].mask.isNull();
     addMask->setEnabled(hasLayer && !hasMask && (document.layers[document.active].isGroup || !document.layers[document.active].image.isNull()));
     removeMask->setEnabled(hasMask); maskEnabled->setEnabled(hasMask);
     maskEnabled->setChecked(hasMask && document.layers[document.active].maskEnabled);
+    maskLinked->setEnabled(hasMask); maskLinked->setChecked(hasMask && document.layers[document.active].maskLinked);
     paintTarget->setEnabled(hasMask);
     if (!hasMask) paintTarget->setCurrentIndex(0);
     if (hasMask) maskPreview->setPixmap(QPixmap::fromImage(document.layers[document.active].mask.scaled(64,48,Qt::IgnoreAspectRatio)));
@@ -451,6 +470,15 @@ void Window::edit(const QString &name, const std::function<void(Arc::Document &)
         auto next = document; operation(next); Arc::validate(next);
         if (next == document) return;
         history.push(new EditCommand(name, document, next, [this](const auto &d) { document = d; refresh(); }));
+    });
+}
+void Window::editGeometry(const QString &name, const std::function<void(Arc::Layer &)> &operation) {
+    if(document.active<0) return;
+    const auto &active=document.layers[document.active];
+    if(paintTarget->currentIndex()!=1 || active.maskLinked || active.mask.isNull()) { editLayer(name,operation); return; }
+    edit(name,[&](auto &d) {
+        auto target=Arc::maskTargetLayer(d.layers[d.active]); operation(target);
+        d.layers[d.active].maskPlacement=Arc::placementOf(target);
     });
 }
 void Window::editLayer(const QString &name, const std::function<void(Arc::Layer &)> &operation) {
