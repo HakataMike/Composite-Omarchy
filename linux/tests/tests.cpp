@@ -11,6 +11,8 @@
 #include <QPlainTextEdit>
 #include "../src/canvas.h"
 #include "../src/window.h"
+#include "../src/workspace.h"
+#include <QTabWidget>
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QJsonDocument>
@@ -46,6 +48,30 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void documentTabsTransferAndIndependentHistory() {
+        QTemporaryDir temp; auto first=temp.filePath("first.comp"),second=temp.filePath("second.comp");
+        auto d=sample(); Arc::Layer folder; folder.isGroup=true; folder.name="Group"; folder.size=d.size;
+        d.layers[0].parentID=folder.id; d.layers.append(folder); d.active=1; Arc::saveProject(d,first);
+        auto destination=sample(); destination.layers[0].image.fill(Qt::blue); Arc::saveProject(destination,second);
+        Workspace workspace; workspace.show(); QVERIFY(QTest::qWaitForWindowActive(&workspace)); workspace.openProject(first); auto *source=workspace.activeEditor();
+        workspace.openProject(second); auto *target=workspace.activeEditor(); QVERIFY(source!=target);
+        auto *tabs=workspace.findChild<QTabWidget *>("documentTabs"); QCOMPARE(tabs->count(),3);
+        workspace.openProject(first); QCOMPARE(tabs->count(),3); QCOMPARE(workspace.activeEditor(),source);
+        workspace.copyLayersTo(2); tabs->setCurrentIndex(2); QTest::qWait(10);
+        QAction *save=nullptr; for(auto *a:target->findChildren<QAction *>()) if(a->text()=="&Save project") save=a;
+        QVERIFY(save); save->trigger(); auto copied=Arc::loadProject(second); QCOMPARE(copied.layers.size(),3);
+        QVERIFY(copied.layers[1].id!=d.layers[0].id); QCOMPARE(copied.layers[1].parentID,copied.layers[2].id);
+        QCOMPARE(Arc::loadProject(first).layers,d.layers);
+        QTest::keyClick(target->findChild<Canvas *>(),Qt::Key_Z,Qt::ControlModifier); save->trigger();
+        QCOMPARE(Arc::loadProject(second).layers,destination.layers);
+        tabs->setCurrentIndex(1); auto transferred=source->selectedLayersForTransfer(); target->receiveLayers(transferred);
+        bool prompted=false;
+        QTimer::singleShot(50,[&] { auto *box=qobject_cast<QMessageBox *>(QApplication::activeModalWidget()); QVERIFY(box); prompted=true; box->button(QMessageBox::Cancel)->click(); });
+        QVERIFY(!workspace.close()); QVERIFY(prompted); QCOMPARE(tabs->count(),3);
+        // Close cancellation leaves every editor and its undo history alive.
+        QVERIFY(workspace.activeEditor()==target); save->trigger();
+        tabs->tabCloseRequested(2); QCOMPARE(tabs->count(),2);
+    }
     void effectsRenderingMasksAndPersistence() {
         auto d=sample(); auto source=d.layers[0].image; auto stroke=Arc::defaultEffect("stroke");
         stroke["size"]=2; stroke["blue"]=1; d.layers[0].effects={{"stroke",stroke}};

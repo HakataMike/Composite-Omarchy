@@ -19,7 +19,7 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 - [x] Adjustment layers: Hue/Saturation, Levels, Curves, Exposure, Gradient Map, Grain
 - [x] All 14 blend modes (reference-color and transparency tests; macOS cross-render fixtures remain)
 - [x] Layer stroke, drop shadow, color overlay, and inner shadow effects
-- [ ] Multiple documents/tabs and inter-document layer transfer
+- [x] Multiple documents/tabs and inter-document layer copying (menu workflow; direct drag between tabs remains a UI refinement)
 
 ## Selection and geometry
 - [x] Rectangle selection constraining painting

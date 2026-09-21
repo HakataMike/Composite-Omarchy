@@ -32,3 +32,5 @@ HEADERS += src/adjustments.h
 SOURCES += src/adjustment_dialog.cpp
 SOURCES += src/effects.cpp
 HEADERS += src/effects.h
+SOURCES += src/workspace.cpp
+HEADERS += src/workspace.h

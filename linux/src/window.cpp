@@ -67,7 +67,8 @@ Window::Window() {
     file->addAction("&Save project", QKeySequence::Save, this, [this] { save(); });
     file->addAction("Save project &as…", QKeySequence::SaveAs, this, [this] { save(true); });
     file->addAction("&Export image…", QKeySequence("Ctrl+Shift+E"), this, &Window::exportDialog);
-    file->addSeparator(); file->addAction("&Quit", QKeySequence::Quit, this, &QWidget::close);
+    file->addAction("Close document",QKeySequence::Close,this,[this] { if(tabbed) emit closeRequested(); else close(); });
+    file->addSeparator(); file->addAction("&Quit", QKeySequence::Quit, this,[this] { if(tabbed) emit quitRequested(); else close(); });
     auto *editMenu = menuBar()->addMenu("&Edit");
     auto *undo = history.createUndoAction(this, "Undo"); undo->setShortcut(QKeySequence::Undo); editMenu->addAction(undo);
     auto *redo = history.createRedoAction(this, "Redo"); redo->setShortcuts({QKeySequence("Ctrl+Shift+Z"), QKeySequence("Ctrl+Y")}); editMenu->addAction(redo);
@@ -118,6 +119,7 @@ Window::Window() {
             for(const auto &layer:d.layers) if(layer.id==parent) { d.layers[d.active].parentID=layer.parentID; break; }
         });
     });
+    layerMenu->addAction("Copy selected layers to document…",this,[this] { emit copyLayersRequested(); });
     auto *adjustments=layerMenu->addMenu("New adjustment layer");
     for(const auto &kind:Arc::adjustmentKinds()) adjustments->addAction(kind+"…",this,[this,kind] { adjustmentDialog(kind); });
     layerMenu->addAction("Edit adjustment…",this,[this] { adjustmentDialog(); });
@@ -418,7 +420,7 @@ Window::Window() {
     connect(canvas, &Canvas::filesDropped, this, &Window::importImages);
     zoomLabel = new QLabel; statusBar()->addPermanentWidget(zoomLabel);
     connect(canvas, &Canvas::zoomChanged, this, [this](double value) { zoomLabel->setText(QString::number(value*100, 'f', 0) + "%"); });
-    connect(&history, &QUndoStack::cleanChanged, this, [this] { setWindowModified(!history.isClean()); });
+    connect(&history, &QUndoStack::cleanChanged, this, [this] { setWindowModified(!history.isClean()); emit documentStatusChanged(); });
     statusBar()->showMessage("Drag to move • Wheel to zoom • Space-drag to pan • Ctrl+I to import");
     refresh();
 }
@@ -467,7 +469,7 @@ void Window::refresh() {
     else maskPreview->clear();
     canvas->setDocument(document);
     setWindowTitle((projectPath.isEmpty() ? "Untitled" : QFileInfo(projectPath).fileName()) + "[*] — Compositor ARC");
-    setWindowModified(!history.isClean()); refreshing = false;
+    setWindowModified(!history.isClean()); refreshing = false; emit documentStatusChanged();
 }
 void Window::report(const std::function<void()> &operation) {
     try { operation(); } catch (const std::exception &e) { QMessageBox::warning(this, "Compositor ARC", QString::fromUtf8(e.what())); }
@@ -525,16 +527,18 @@ bool Window::save(bool choosePath) {
     report([&] { Arc::saveProject(document, path); projectPath = path; history.setClean(); refresh(); saved = true; });
     return saved;
 }
-void Window::openProject(const QString &path) {
+bool Window::openProject(const QString &path) {
+    bool opened=false;
     report([&] {
         auto next = Arc::loadProject(path);
         if (!mayDiscard()) return;
-        document = next; projectPath = path; sizeFirstImport = false; history.clear(); refresh(); canvas->fit();
+        document = next; projectPath = path; sizeFirstImport = false; history.clear(); refresh(); canvas->fit(); opened=true;
     });
+    return opened;
 }
 void Window::chooseProject() {
     auto path = QFileDialog::getExistingDirectory(this, "Select a .comp project folder");
-    if (!path.isEmpty()) openProject(path);
+    if (!path.isEmpty()) { if(tabbed) emit openRequested(path); else openProject(path); }
 }
 void Window::newProject() {
     QDialog dialog(this); dialog.setWindowTitle("New canvas"); QFormLayout form(&dialog);
@@ -545,6 +549,7 @@ void Window::newProject() {
     if (dialog.exec() != QDialog::Accepted) return;
     report([&] {
         Arc::Document next; next.size = {width.value(), height.value()}; Arc::validate(next);
+        if(tabbed) { emit newDocumentRequested(next); return; }
         if (!mayDiscard()) return;
         document = next; projectPath.clear(); sizeFirstImport = false; history.clear(); refresh(); canvas->fit();
     });
@@ -652,3 +657,32 @@ void Window::exportDialog() {
     if (!path.isEmpty()) report([&] { Arc::exportImage(document, path); statusBar()->showMessage("Exported " + path, 5000); });
 }
 void Window::closeEvent(QCloseEvent *event) { if (mayDiscard()) event->accept(); else event->ignore(); }
+
+QString Window::documentTitle() const { return projectPath.isEmpty() ? "Untitled" : QFileInfo(projectPath).fileName(); }
+void Window::initializeDocument(const Arc::Document &d) {
+    Arc::validate(d); document=d; projectPath.clear(); history.clear(); sizeFirstImport=false; refresh();
+}
+QVector<Arc::Layer> Window::selectedLayersForTransfer() const {
+    QSet<QUuid> chosen;
+    for(auto *item:layers->selectedItems()) {
+        auto id=item->data(0,Qt::UserRole+1).toUuid(); chosen.insert(id);
+        for(int i:Arc::descendants(document,id)) chosen.insert(document.layers[i].id);
+    }
+    auto source=document;
+    for(int i=0;i<source.layers.size();++i) if(chosen.contains(source.layers[i].id)
+        && !source.layers[i].maskSourceID.isNull() && !chosen.contains(source.layers[i].maskSourceID)) Arc::bakeClippingMask(source,i);
+    QHash<QUuid,QUuid> ids; for(auto id:chosen) ids[id]=QUuid::createUuid();
+    QVector<Arc::Layer> result;
+    for(auto layer:source.layers) if(chosen.contains(layer.id)) {
+        layer.id=ids[layer.id]; layer.parentID=ids.value(layer.parentID); layer.maskSourceID=ids.value(layer.maskSourceID); result.append(layer);
+    }
+    return result;
+}
+void Window::receiveLayers(const QVector<Arc::Layer> &incoming) {
+    if(incoming.isEmpty()) return;
+    edit("Copy layers from document",[&](auto &d) {
+        QUuid parent; if(d.active>=0) parent=d.layers[d.active].isGroup ? d.layers[d.active].id : d.layers[d.active].parentID;
+        for(auto layer:incoming) { if(layer.parentID.isNull()) layer.parentID=parent; d.layers.append(layer); }
+        d.active=d.layers.size()-1;
+    });
+}

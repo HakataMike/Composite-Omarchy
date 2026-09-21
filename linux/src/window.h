@@ -14,7 +14,21 @@ class Window : public QMainWindow {
 public:
     Window();
     void importImages(const QStringList &paths);
-    void openProject(const QString &path);
+    bool openProject(const QString &path);
+    void initializeDocument(const Arc::Document &document);
+    void setTabbed(bool enabled) { tabbed=enabled; }
+    QString documentTitle() const;
+    QString projectFile() const { return projectPath; }
+    bool canCloseDocument() { return mayDiscard(); }
+    QVector<Arc::Layer> selectedLayersForTransfer() const;
+    void receiveLayers(const QVector<Arc::Layer> &layers);
+signals:
+    void documentStatusChanged();
+    void newDocumentRequested(Arc::Document document);
+    void openRequested(QString path);
+    void closeRequested();
+    void quitRequested();
+    void copyLayersRequested();
 protected:
     void closeEvent(QCloseEvent *) override;
 private:
@@ -30,7 +44,7 @@ private:
     QPushButton *addMask, *removeMask;
     QLabel *maskPreview;
     QLabel *zoomLabel;
-    bool refreshing = false;
+    bool refreshing = false, tabbed = false;
     bool sizeFirstImport = true;
     void refresh();
     void edit(const QString &name, const std::function<void(Arc::Document &)> &operation);

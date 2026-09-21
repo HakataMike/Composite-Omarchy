@@ -46,7 +46,7 @@ Qt selects its platform from the desktop environment. If needed, force native Wa
 - Normal, Multiply, Screen, Overlay, Darken, Lighten, Difference, Color Dodge, Color Burn, Soft Light, Hue, Saturation, Color, and Luminosity blending.
 - Wheel zoom, middle-drag or Space-drag pan, and Fit Canvas (`Ctrl+0`).
 - Undo/redo (`Ctrl+Z`, `Ctrl+Shift+Z` or `Ctrl+Y`), with up to 100 edits. Source images are implicitly shared across history snapshots.
-- Project saving (`Ctrl+S`), Save As, and unsaved-change prompts before closing or replacing a document.
+- Project saving (`Ctrl+S`), Save As, and unsaved-change prompts before closing a document or quitting.
 - PNG export with transparency; JPEG export at quality 95 with white behind transparent areas. Export does not mark a project saved.
 
 Use File → Open Project to select the `.comp` directory itself. Linux displays these document packages as folders.
@@ -110,3 +110,5 @@ Independent masks: uncheck Link mask to layer, choose Paint mask, then use Move 
 Adjustment layers: Layer → New adjustment layer offers Hue/Saturation, Levels, Curves, Exposure, Gradient Map, and Grain. Edit adjustment reopens their controls with live preview, Cancel, and one-step undo. Levels/Curves retain independent RGB and color-channel settings; Hue/Saturation retains seven color ranges, editable falloff bands, Colorize, and range inversion. Masks, selection-based creation, opacity, blend modes, folders, clipping, and native v7 persistence are supported. Source pixels remain unchanged. Hue/Saturation evaluates the native HSL formulas directly; Core Image cube interpolation may produce small cross-platform differences.
 
 Layer effects: Layer → Layer effects offers editable Stroke (inside/outside), Drop Shadow, Color Overlay, and Inner Shadow. Each effect can be included, hidden, recolored, or removed independently. Effects follow the layer’s visible masked shape, expand beyond its source bounds, and participate in transformations, clipping, merge operations, undo, exports, and project persistence. Live preview can be disabled on large layers. Shadows use the existing three-box Gaussian approximation; wide strokes use linear-time square morphology, matching the native stroke shape.
+
+Document tabs: New canvas and Open project create separate tabs; reopening the same project focuses its existing tab. Each editor retains its selection, view, tools, and undo history. Close document (Ctrl+W), the tab close button, and Quit check unsaved changes. Layer → Copy selected layers to document copies the selection and folder descendants into another tab as one undo step, remaps IDs, and bakes external clipping dependencies. Geometry is retained in document coordinates. Tabs may be reordered; direct layer dragging between tabs is not yet implemented.
