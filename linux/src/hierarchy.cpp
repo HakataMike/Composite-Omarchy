@@ -3,6 +3,7 @@
 #include "clipping.h"
 #include "masks.h"
 #include "effects.h"
+#include "geometry.h"
 #include <QHash>
 #include <QSet>
 #include <cmath>
@@ -200,16 +201,7 @@ void transformGroup(Document &d, int index, const Layer &replacement) {
     for(int i:descendants(d,original.id)) {
         auto &child=d.layers[i]; auto before=child;
         auto transformed=child.transform()*mapping;
-        auto origin=transformed.map(QPointF());
-        auto vx=transformed.map(QPointF(child.size.width(),0))-origin;
-        auto vy=transformed.map(QPointF(0,child.size.height()))-origin;
-        double width=std::hypot(vx.x(),vx.y()),height=std::hypot(vy.x(),vy.y());
-        if(std::abs(QPointF::dotProduct(vx,vy))>1e-6*width*height)
-            throw std::runtime_error("This folder scaling would shear a rotated child. Use proportional width and height changes.");
-        auto center=transformed.map(QPointF(child.size.width()/2,child.size.height()/2));
-        child.size={width,height}; child.origin=center-QPointF(width/2,height/2);
-        child.rotation=std::atan2(vx.y(),vx.x())*180/M_PI;
-        child.flipX=false; child.flipY=(vx.x()*vy.y()-vx.y()*vy.x())<0;
+        child=placedLayer(child,transformed);
         followMask(before,child);
         if(!child.shape.isEmpty()) child.image=shapeImage(child.shape,child.size);
     }

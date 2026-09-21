@@ -1,4 +1,5 @@
 #include "masks.h"
+#include "geometry.h"
 #include <QJsonArray>
 #include <cmath>
 #include <stdexcept>
@@ -68,14 +69,7 @@ void followMask(const Layer &before, Layer &after) {
     auto target=placement(before.maskPlacement);
     QTransform scale; scale.scale(after.size.width()/before.size.width(),after.size.height()/before.size.height());
     auto mapping=target.transform()*before.transform().inverted()*scale*after.transform();
-    auto zero=mapping.map(QPointF());
-    auto x=mapping.map(QPointF(target.size.width(),0))-zero, y=mapping.map(QPointF(0,target.size.height()))-zero;
-    double width=std::hypot(x.x(),x.y()),height=std::hypot(y.x(),y.y());
-    if(std::abs(QPointF::dotProduct(x,y))>width*height*1e-6)
-        throw std::runtime_error("This transform would shear the linked mask. Scale proportionally or unlink it.");
-    auto center=mapping.map(QPointF(target.size.width()/2,target.size.height()/2));
-    target.size={width,height}; target.origin=center-QPointF(width/2,height/2);
-    target.rotation=std::atan2(x.y(),x.x())*180/M_PI; target.flipX=false; target.flipY=x.x()*y.y()-x.y()*y.x()<0;
+    target=placedLayer(target,mapping);
     after.maskPlacement=placementOf(target);
 }
 void offsetMask(Layer &l, QPointF delta) {

@@ -4,6 +4,7 @@
 #include "operations.h"
 #include "hierarchy.h"
 #include "masks.h"
+#include "geometry.h"
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QKeyEvent>
@@ -168,15 +169,15 @@ void Canvas::paintEvent(QPaintEvent *) {
     p.drawImage(QPoint(), composite); p.restore();
     QPen border(palette().color(QPalette::Mid)); border.setCosmetic(true); p.setPen(border); p.drawRect(bounds);
     if (document.active >= 0 && tool == Tool::Move) {
-        auto l = document.layers[document.active];
-        if(maskTarget && !l.maskLinked && !l.mask.isNull()) l=Arc::maskTargetLayer(l);
-        if (l.visible) {
-            p.save();
-            p.setTransform(l.transform(), true);
-            QPen outline(QColor(83,168,255), 1, Qt::DashLine); outline.setCosmetic(true);
-            p.setPen(outline); p.setBrush(Qt::NoBrush); p.drawRect(QRectF(QPointF(), l.size));
-            p.restore();
+        auto box=activeTransformBox(); auto corners=distortActive && transformHandle>=0 ? transformQuad : Arc::layerCorners(box);
+        QPen outline(QColor(83,168,255),1,Qt::DashLine); outline.setCosmetic(true); p.setPen(outline); p.setBrush(Qt::NoBrush); p.drawPolygon(corners);
+        p.setPen(QPen(QColor(83,168,255),0)); p.setBrush(Qt::white);
+        for(int i=0;i<8;++i) {
+            auto point=i%2 ? (corners[i/2]+corners[(i/2+1)%4])/2 : corners[i/2];
+            p.drawRect(QRectF(point-QPointF(3/zoom,3/zoom),QSizeF(6/zoom,6/zoom)));
         }
+        auto rotate=box.transform().map(QPointF(box.size.width()/2,-24/zoom));
+        p.drawEllipse(rotate,4/zoom,4/zoom);
     }
     if(guidesVisible) {
         p.save(); p.setClipRect(bounds);
@@ -217,6 +218,25 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
         panning = true; setCursor(Qt::ClosedHandCursor); return;
     }
     if (event->button() != Qt::LeftButton) return;
+    if(tool==Tool::Move && document.active>=0) {
+        auto box=activeTransformBox(); auto corners=Arc::layerCorners(box); auto point=documentPoint(event->position());
+        int handle=-1;
+        for(int i=0;i<8;++i) {
+            auto position=i%2 ? (corners[i/2]+corners[(i/2+1)%4])/2 : corners[i/2];
+            if(QLineF(point,position).length()<7/zoom) handle=i;
+        }
+        auto rotate=box.transform().map(QPointF(box.size.width()/2,-24/zoom));
+        if(QLineF(point,rotate).length()<7/zoom) handle=8;
+        if(handle<0 && selectedIDs.size()>1 && !selection && box.transform().mapRect(QRectF(QPointF(),box.size)).contains(point)) handle=9;
+        if(handle>=0) {
+            transformMask=maskTarget && !document.layers[document.active].maskLinked && !document.layers[document.active].mask.isNull();
+            transformIDs=selectedIDs; if(transformIDs.isEmpty()) transformIDs={document.layers[document.active].id};
+            if(transformMask) transformIDs={document.layers[document.active].id};
+            boxOriginal=box; dragOriginal=document; transformHandle=handle; transformQuad=corners;
+            distortActive=handle<8 && handle%2==0 && (event->modifiers() & Qt::ControlModifier) && !transformMask;
+            return;
+        }
+    }
     if(tool==Tool::Move && guidesVisible && !guidesLocked && !(event->modifiers() & Qt::AltModifier)
         && QRectF(QPointF(),document.size).contains(documentPoint(event->position()))) {
         auto point=documentPoint(event->position());
@@ -315,7 +335,7 @@ void Canvas::mousePressEvent(QMouseEvent *event) {
         const auto &group=document.layers[document.active];
         if(QRectF(QPointF(),group.size).contains(group.transform().inverted().map(point))) hit=document.active;
     }
-    emit selected(hit);
+    emit selected(hit,event->modifiers() & Qt::ShiftModifier);
     // Selection may synchronously replace the displayed document.
     if (hit >= 0) {
         draggingMask=false; dragOriginal=document; dragLayer = hit; originalOrigin = document.layers[hit].origin; dragging = true;
@@ -333,6 +353,10 @@ void Canvas::mouseMoveEvent(QMouseEvent *event) {
     else if (dragGuide>=0) {
         auto &g=document.guides[dragGuide]; auto point=documentPoint(event->position());
         g.position=std::clamp(g.axis=="vertical" ? point.x() : point.y(),-1000000.0,1000000.0); update();
+    }
+    else if(transformHandle>=0) {
+        try { updateTransform(documentPoint(event->position()),event->modifiers()); }
+        catch(const std::exception &error) { cancelGesture(); emit errorOccurred(QString::fromUtf8(error.what())); }
     }
     else if(movingSelection) {
         auto delta=(event->position()-pressPoint)/zoom;
@@ -379,6 +403,13 @@ void Canvas::updateDraft(QPointF point, Qt::KeyboardModifiers modifiers) {
     draftEnd=draftAnchor+delta; update();
 }
 void Canvas::mouseReleaseEvent(QMouseEvent *event) {
+    if(transformHandle>=0 && event->button()==Qt::LeftButton) {
+        mouseMoveEvent(event); if(transformHandle<0) return;
+        auto result=document; bool changed=!(document==dragOriginal);
+        transformHandle=-1; distortActive=false; document=dragOriginal; refreshImage();
+        if(changed) emit layersTransformed(result);
+        return;
+    }
     if(movingSelection && event->button()==Qt::LeftButton) {
         mouseMoveEvent(event); if(!movingSelection) return;
         bool pixels=movingPixels,duplicate=duplicatePixels; auto mask=previousSelectionMask; auto delta=selectionOffset;
@@ -445,6 +476,7 @@ void Canvas::wheelEvent(QWheelEvent *event) {
     offset = event->position() - anchor*zoom; emit zoomChanged(zoom); update(); event->accept();
 }
 void Canvas::cancelGesture() {
+    if(transformHandle>=0) { document=dragOriginal; transformHandle=-1; distortActive=false; refreshImage(); }
     if(movingSelection) {
         selection=previousSelection; selectionMask=previousSelectionMask; document=dragOriginal;
         movingSelection=movingPixels=false; previousSelection.reset(); previousSelectionMask={}; refreshImage();
@@ -486,4 +518,62 @@ void Canvas::dropEvent(QDropEvent *event) {
     QStringList paths;
     for (const auto &url : event->mimeData()->urls()) if (url.isLocalFile()) paths.append(url.toLocalFile());
     if (!paths.isEmpty()) { emit filesDropped(paths); event->acceptProposedAction(); }
+}
+
+Arc::Layer Canvas::activeTransformBox() const {
+    if(document.active<0) return {};
+    const auto &active=document.layers[document.active];
+    if(maskTarget && !active.maskLinked && !active.mask.isNull()) return Arc::maskTargetLayer(active);
+    return Arc::transformBox(document,selectedIDs.isEmpty() ? QVector<QUuid>{active.id} : selectedIDs);
+}
+void Canvas::updateTransform(QPointF point,Qt::KeyboardModifiers modifiers) {
+    document=dragOriginal; auto changed=boxOriginal;
+    auto start=documentPoint(pressPoint),delta=point-start;
+    if(modifiers & Qt::ShiftModifier && (distortActive || transformHandle==9)) {
+        if(std::abs(delta.x())>std::abs(delta.y())) delta.setY(0); else delta.setX(0);
+        point=start+delta;
+    }
+    if(distortActive) {
+        transformQuad=Arc::layerCorners(boxOriginal); transformQuad[transformHandle/2]+=delta;
+        Arc::distortLayers(document,transformIDs,Arc::layerCorners(boxOriginal),transformQuad);
+    } else {
+        if(transformHandle==9) {
+            changed.origin+=delta;
+            if(snapping && !(modifiers & Qt::AltModifier)) changed.origin=Arc::snapLayerOrigin(dragOriginal,dragOriginal.active,changed.origin,6/zoom,guidesVisible);
+        } else if(transformHandle==8) {
+            auto center=boxOriginal.origin+QPointF(boxOriginal.size.width()/2,boxOriginal.size.height()/2);
+            auto a=start-center,b=point-center;
+            changed.rotation+=std::atan2(a.x()*b.y()-a.y()*b.x(),QPointF::dotProduct(a,b))*180/M_PI;
+            if(modifiers & Qt::ShiftModifier) changed.rotation=std::round(changed.rotation/15)*15;
+        } else {
+            auto corners=Arc::layerCorners(boxOriginal);
+            auto handlePoint=transformHandle%2 ? (corners[transformHandle/2]+corners[(transformHandle/2+1)%4])/2 : corners[transformHandle/2];
+            auto local=boxOriginal.transform().inverted().map(handlePoint+delta); double width=boxOriginal.size.width(),height=boxOriginal.size.height();
+            double left=0,right=width,top=0,bottom=height;
+            bool changesLeft=transformHandle==0 || transformHandle==6 || transformHandle==7;
+            bool changesRight=transformHandle==2 || transformHandle==3 || transformHandle==4;
+            bool changesTop=transformHandle<=2,changesBottom=transformHandle>=4 && transformHandle<=6;
+            if(changesLeft) left=std::min(local.x(),right-1);
+            if(changesRight) right=std::max(local.x(),left+1);
+            if(changesTop) top=std::min(local.y(),bottom-1);
+            if(changesBottom) bottom=std::max(local.y(),top+1);
+            if(modifiers & Qt::ShiftModifier && transformHandle%2==0) {
+                double scale=std::max((right-left)/width,(bottom-top)/height);
+                if(changesLeft) left=right-width*scale; else right=left+width*scale;
+                if(changesTop) top=bottom-height*scale; else bottom=top+height*scale;
+            }
+            if(modifiers & Qt::AltModifier) {
+                if(changesLeft) right=width-left;
+                if(changesRight) left=width-right;
+                if(changesTop) bottom=height-top;
+                if(changesBottom) top=height-bottom;
+            }
+            changed.size={std::max(1.0,right-left),std::max(1.0,bottom-top)};
+            auto center=boxOriginal.transform().map(QPointF((left+right)/2,(top+bottom)/2));
+            changed.origin=center-QPointF(changed.size.width()/2,changed.size.height()/2);
+        }
+        if(transformMask) document.layers[document.active].maskPlacement=Arc::placementOf(changed);
+        else Arc::transformLayers(document,transformIDs,boxOriginal,changed);
+    }
+    Arc::validate(document); refreshImage();
 }

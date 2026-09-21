@@ -10,6 +10,7 @@ public:
     enum class Tool { Move, Brush, Eraser, Rectangle, Ellipse, Lasso, Polygon, Wand, Eyedropper, Gradient, Clone, Heal, Blur, ShapeRectangle, ShapeEllipse, ShapeLine, Text };
     explicit Canvas(QWidget *parent = nullptr);
     void setTool(Tool tool);
+    void setSelectedLayers(QVector<QUuid> ids) { selectedIDs=std::move(ids); update(); }
     void setBrush(const Arc::Brush &brush);
     void setMaskTarget(bool enabled);
     void setGuidesVisible(bool enabled);
@@ -31,7 +32,8 @@ public:
     void zoomBy(double factor);
     QPointF canvasToWidget(QPointF point) const;
 signals:
-    void selected(int index);
+    void selected(int index, bool extend = false);
+    void layersTransformed(Arc::Document document);
     void moved(int index, QPointF origin);
     void maskMoved(int index, QJsonObject placement);
     void selectionPixelsMoved(QImage coverage,QPointF offset,bool duplicate);
@@ -62,6 +64,13 @@ private:
     QImage composite;
     double zoom = 1;
     QPointF offset = {40, 40}, pressPoint, originalOrigin, originalOffset;
+    QVector<QUuid> selectedIDs,transformIDs;
+    Arc::Layer boxOriginal;
+    int transformHandle=-1;
+    bool distortActive=false, transformMask=false;
+    QPolygonF transformQuad;
+    void updateTransform(QPointF point,Qt::KeyboardModifiers modifiers);
+    Arc::Layer activeTransformBox() const;
     bool drafting = false;
     QPointF draftAnchor, draftStart, draftEnd;
     void updateDraft(QPointF point, Qt::KeyboardModifiers modifiers);

@@ -3,6 +3,7 @@
 #include "../src/effects.h"
 #include "../src/curve_editor.h"
 #include "../src/spatial_filters.h"
+#include "../src/geometry.h"
 #include <QDialogButtonBox>
 #include "../src/operations.h"
 #include "../src/selection.h"
@@ -50,6 +51,34 @@ class Tests : public QObject {
         QFile f(path + "/manifest.json"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(object).toJson());
     }
 private slots:
+    void groupGeometryProjectionAndDistortion() {
+        auto d=sample(); d.layers[0].rotation=30;
+        auto source=d.layers[0].image; Arc::groupLayers(d,{d.layers[0].id}); auto folder=d.layers[d.active]; folder.size.setWidth(folder.size.width()*2);
+        Arc::transformGroup(d,d.active,folder); Arc::validate(d); QCOMPARE(d.layers[0].image,source);
+        QVERIFY(d.layers[0].size.width()>16); QVERIFY(d.layers[0].rotation<30);
+        auto before=Arc::layerCorners(d.layers[0]),after=before; after[0]+=QPointF(3,2);
+        auto id=d.layers[0].id; Arc::distortLayers(d,{id},before,after); Arc::validate(d);
+        QCOMPARE(d.layers[0].rotation,0.0); QVERIFY(d.layers[0].shape.isEmpty()); QVERIFY(d.layers[0].image!=source);
+        QTemporaryDir temp; auto file=temp.filePath("distorted.comp"); Arc::saveProject(d,file); QCOMPARE(Arc::render(Arc::loadProject(file)),Arc::render(d));
+        auto invalid=before; invalid[0]=invalid[2]; QVERIFY_THROWS_EXCEPTION(std::runtime_error,Arc::distortLayers(d,{id},before,invalid));
+    }
+    void transformHandleGesturesAndCancellation() {
+        auto d=sample(); Canvas canvas; canvas.resize(640,480); canvas.show(); canvas.setDocument(d); canvas.fit(); canvas.setTool(Canvas::Tool::Move);
+        QSignalSpy transformed(&canvas,&Canvas::layersTransformed); auto point=[&](QPointF p) { return canvas.canvasToWidget(p).toPoint(); };
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,point({18,15})); QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,point({26,21}));
+        QCOMPARE(transformed.count(),1); auto resized=qvariant_cast<Arc::Document>(transformed[0][0]);
+        QVERIFY(std::abs(resized.layers[0].size.width()-24)<0.2); QCOMPARE(resized.layers[0].image,d.layers[0].image);
+        canvas.setDocument(d); transformed.clear();
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::ControlModifier,point({2,3})); QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::ControlModifier,point({5,5}));
+        QCOMPARE(transformed.count(),1); auto warped=qvariant_cast<Arc::Document>(transformed[0][0]); QVERIFY(warped.layers[0].image!=d.layers[0].image);
+        canvas.setDocument(d); transformed.clear();
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,point({18,15})); QTest::mouseMove(&canvas,point({26,21})); QTest::keyClick(&canvas,Qt::Key_Escape);
+        QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,point({26,21})); QCOMPARE(transformed.count(),0);
+        auto second=d.layers[0]; second.id=QUuid::createUuid(); second.origin={20,10}; d.layers.append(second); canvas.setDocument(d); canvas.setSelectedLayers({d.layers[0].id,second.id});
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,point({12,9})); QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,point({17,9}));
+        QCOMPARE(transformed.count(),1); auto moved=qvariant_cast<Arc::Document>(transformed[0][0]);
+        QVERIFY(std::abs(moved.layers[0].origin.x()-7)<0.2); QVERIFY(std::abs(moved.layers[1].origin.x()-25)<0.2);
+    }
     void expandedBlursAndHueMath() {
         auto d=sample(); auto source=d.layers[0]; auto gaussian=Arc::defaultFilter("Gaussian Blur"); gaussian.values["radius"]=3;
         auto blurred=Arc::expandedBlur(source,gaussian); QVERIFY(blurred.image.width()>source.image.width());

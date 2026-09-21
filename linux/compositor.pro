@@ -38,3 +38,5 @@ SOURCES += src/curve_editor.cpp
 HEADERS += src/curve_editor.h
 SOURCES += src/spatial_filters.cpp
 HEADERS += src/spatial_filters.h
+SOURCES += src/geometry.cpp
+HEADERS += src/geometry.h

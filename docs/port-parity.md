@@ -10,10 +10,10 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 - [ ] Linux packaging, launcher, release build and installation instructions
 
 ## Layer workflow
-- [ ] Folders, nesting/reordering, group transforms and masks (implemented; nonuniform shear and broader drag/drop acceptance remain)
+- [ ] Folders, nesting/reordering, group transforms and masks (implemented; broader physical drag/drop acceptance remains)
 - [x] Clipping stacks and dependency masks, bake/release, source deletion preservation
 - [x] Independent mask transforms, link/unlink, painting in mask coordinates, persistence
-- [ ] Shear-producing group and linked-mask transforms
+- [x] Shear-producing group and linked-mask transforms (native rotated-rectangle projection)
 - [x] Mask fill/invert/blur/feather (Gaussian approximation documented)
 - [ ] Merge Down / Merge Layers / Merge Group
 - [x] Adjustment layers: Hue/Saturation, Levels, Curves, Exposure, Gradient Map, Grain
@@ -26,7 +26,7 @@ Scope: the macOS app in this checkout, including behavior described in README.md
 - [x] Ellipse, freehand/polygonal lasso, magic wand
 - [x] Add/subtract/invert/feather selections; load image/mask coverage
 - [x] Move outlines/pixels, duplicate selected pixels, clipboard
-- [ ] Transform handles, free distortion, multiple-layer transforms
+- [ ] Transform handles and multiple-layer transforms implemented; convex free distortion implemented, folded shapes remain
 - [x] Persistent guides, guide editing/locking/visibility, canvas flips
 - [ ] Snapping (layer movement implemented; resize/shape/selection snapping and rulers remain)
 - [x] Crop to selection bounds, canvas size, image size/resolution (interactive snapping crop remains)

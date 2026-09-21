@@ -8,6 +8,7 @@
 #include "hierarchy.h"
 #include "clipping.h"
 #include "masks.h"
+#include "geometry.h"
 #include "layer_tree.h"
 #include <QStyle>
 #include <QJsonArray>
@@ -423,7 +424,16 @@ Window::Window() {
         });
     });
     connect(canvas, &Canvas::textRequested, this, [this](QRectF bounds,QColor color) { textDialog(bounds,color); });
-    connect(canvas, &Canvas::selected, this, [this](int index) { document.active = index; refresh(); });
+    connect(layers,&QTreeWidget::itemSelectionChanged,this,[this] {
+        if(refreshing) return;
+        QVector<QUuid> ids; for(auto *item:layers->selectedItems()) ids.append(item->data(0,Qt::UserRole+1).toUuid());
+        canvas->setSelectedLayers(ids);
+    });
+    connect(canvas,&Canvas::layersTransformed,this,[this](const Arc::Document &result) { edit("Transform layers",[&](auto &d) { d=result; }); });
+    connect(canvas, &Canvas::selected, this, [this](int index,bool extend) {
+        if(!extend || index<0) { QSignalBlocker block(layers); layers->clearSelection(); }
+        document.active=index; refresh();
+    });
     connect(canvas, &Canvas::guideMoved, this, [this](int index,double position) {
         edit("Move guide",[=](auto &d) { d.guides[index].position=position; });
     });
@@ -478,6 +488,8 @@ void Window::refresh() {
     if (document.active >= 0) {
         const auto &active = document.layers[document.active];
         auto l=paintTarget->currentIndex()==1 && !active.maskLinked ? Arc::maskTargetLayer(active) : active;
+        QVector<QUuid> ids; for(auto *item:layers->selectedItems()) ids.append(item->data(0,Qt::UserRole+1).toUuid());
+        if(ids.size()>1 && paintTarget->currentIndex()==0) l=Arc::transformBox(document,ids);
         x->setValue(l.origin.x()); y->setValue(l.origin.y()); w->setValue(l.size.width()); h->setValue(l.size.height());
         angle->setValue(l.rotation); opacity->setValue(active.opacity*100); blend->setCurrentText(active.blend); blend->setEnabled(!active.isGroup);
     }
@@ -492,6 +504,8 @@ void Window::refresh() {
     if (hasMask) maskPreview->setPixmap(QPixmap::fromImage(document.layers[document.active].mask.scaled(64,48,Qt::IgnoreAspectRatio)));
     else maskPreview->clear();
     canvas->setDocument(document);
+    QVector<QUuid> selectedIDs; for(auto *item:layers->selectedItems()) selectedIDs.append(item->data(0,Qt::UserRole+1).toUuid());
+    canvas->setSelectedLayers(selectedIDs);
     setWindowTitle((projectPath.isEmpty() ? "Untitled" : QFileInfo(projectPath).fileName()) + "[*] — Compositor ARC");
     setWindowModified(!history.isClean()); refreshing = false; emit documentStatusChanged();
 }
@@ -507,6 +521,10 @@ void Window::edit(const QString &name, const std::function<void(Arc::Document &)
 }
 void Window::editGeometry(const QString &name, const std::function<void(Arc::Layer &)> &operation) {
     if(document.active<0) return;
+    QVector<QUuid> ids; for(auto *item:layers->selectedItems()) ids.append(item->data(0,Qt::UserRole+1).toUuid());
+    if(ids.size()>1 && paintTarget->currentIndex()==0) {
+        edit(name,[&](auto &d) { auto before=Arc::transformBox(d,ids),after=before; operation(after); Arc::transformLayers(d,ids,before,after); }); return;
+    }
     const auto &active=document.layers[document.active];
     if(paintTarget->currentIndex()!=1 || active.maskLinked || active.mask.isNull()) { editLayer(name,operation); return; }
     edit(name,[&](auto &d) {
